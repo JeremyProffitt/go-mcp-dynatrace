@@ -24,17 +24,17 @@ type DQLQueryRequest struct {
 }
 
 type DQLQueryResponse struct {
-	State          string                   `json:"state"`
-	Progress       int                      `json:"progress"`
-	Result         *DQLQueryResult          `json:"result,omitempty"`
-	Error          *DQLError                `json:"error,omitempty"`
-	RequestToken   string                   `json:"requestToken,omitempty"`
+	State        string          `json:"state"`
+	Progress     int             `json:"progress"`
+	Result       *DQLQueryResult `json:"result,omitempty"`
+	Error        *DQLError       `json:"error,omitempty"`
+	RequestToken string          `json:"requestToken,omitempty"`
 }
 
 type DQLQueryResult struct {
-	Records       []map[string]interface{} `json:"records"`
-	Types         []DQLFieldType           `json:"types,omitempty"`
-	Metadata      *DQLMetadata             `json:"metadata,omitempty"`
+	Records  []map[string]interface{} `json:"records"`
+	Types    []DQLFieldType           `json:"types,omitempty"`
+	Metadata *DQLMetadata             `json:"metadata,omitempty"`
 }
 
 type DQLFieldType struct {
@@ -84,11 +84,11 @@ type DQLVerifyResponse struct {
 
 // Entity types
 type Entity struct {
-	EntityID   string                 `json:"entityId"`
-	Type       string                 `json:"type"`
-	DisplayName string                `json:"displayName"`
-	Properties map[string]interface{} `json:"properties,omitempty"`
-	Tags       []Tag                  `json:"tags,omitempty"`
+	EntityID    string                 `json:"entityId"`
+	Type        string                 `json:"type"`
+	DisplayName string                 `json:"displayName"`
+	Properties  map[string]interface{} `json:"properties,omitempty"`
+	Tags        []Tag                  `json:"tags,omitempty"`
 }
 
 type Tag struct {
@@ -99,31 +99,31 @@ type Tag struct {
 
 // Problem types
 type Problem struct {
-	ProblemID           string   `json:"problemId"`
-	DisplayID           string   `json:"displayId"`
-	Title               string   `json:"title"`
-	Status              string   `json:"status"`
-	SeverityLevel       string   `json:"severityLevel"`
-	ImpactLevel         string   `json:"impactLevel"`
-	AffectedEntities    []string `json:"affectedEntities,omitempty"`
-	StartTime           int64    `json:"startTime"`
-	EndTime             int64    `json:"endTime,omitempty"`
-	ManagementZones     []string `json:"managementZones,omitempty"`
-	RootCauseEntity     string   `json:"rootCauseEntity,omitempty"`
+	ProblemID        string   `json:"problemId"`
+	DisplayID        string   `json:"displayId"`
+	Title            string   `json:"title"`
+	Status           string   `json:"status"`
+	SeverityLevel    string   `json:"severityLevel"`
+	ImpactLevel      string   `json:"impactLevel"`
+	AffectedEntities []string `json:"affectedEntities,omitempty"`
+	StartTime        int64    `json:"startTime"`
+	EndTime          int64    `json:"endTime,omitempty"`
+	ManagementZones  []string `json:"managementZones,omitempty"`
+	RootCauseEntity  string   `json:"rootCauseEntity,omitempty"`
 }
 
 // Vulnerability types
 type Vulnerability struct {
-	VulnerabilityID   string  `json:"vulnerabilityId"`
-	DisplayID         string  `json:"displayId"`
-	Title             string  `json:"title"`
-	CVEIDs            []string `json:"cveIds,omitempty"`
-	RiskLevel         string  `json:"riskLevel"`
-	RiskScore         float64 `json:"riskScore"`
-	Status            string  `json:"status"`
-	AffectedEntities  []string `json:"affectedEntities,omitempty"`
-	FirstSeenAt       int64   `json:"firstSeenTimestamp,omitempty"`
-	Technology        string  `json:"technology,omitempty"`
+	VulnerabilityID  string   `json:"vulnerabilityId"`
+	DisplayID        string   `json:"displayId"`
+	Title            string   `json:"title"`
+	CVEIDs           []string `json:"cveIds,omitempty"`
+	RiskLevel        string   `json:"riskLevel"`
+	RiskScore        float64  `json:"riskScore"`
+	Status           string   `json:"status"`
+	AffectedEntities []string `json:"affectedEntities,omitempty"`
+	FirstSeenAt      int64    `json:"firstSeenTimestamp,omitempty"`
+	Technology       string   `json:"technology,omitempty"`
 }
 
 // Workflow types
@@ -138,10 +138,10 @@ type Workflow struct {
 }
 
 type WorkflowCreateRequest struct {
-	Title       string             `json:"title"`
-	Description string             `json:"description,omitempty"`
-	IsPrivate   bool               `json:"isPrivate,omitempty"`
-	Trigger     *WorkflowTrigger   `json:"trigger,omitempty"`
+	Title       string                   `json:"title"`
+	Description string                   `json:"description,omitempty"`
+	IsPrivate   bool                     `json:"isPrivate,omitempty"`
+	Trigger     *WorkflowTrigger         `json:"trigger,omitempty"`
 	Tasks       map[string]*WorkflowTask `json:"tasks,omitempty"`
 }
 
@@ -150,13 +150,13 @@ type WorkflowTrigger struct {
 }
 
 type EventTrigger struct {
-	IsActive      bool               `json:"isActive"`
-	TriggerConfig *TriggerConfig     `json:"triggerConfiguration,omitempty"`
+	IsActive      bool           `json:"isActive"`
+	TriggerConfig *TriggerConfig `json:"triggerConfiguration,omitempty"`
 }
 
 type TriggerConfig struct {
-	Type   string              `json:"type"`
-	Value  map[string]interface{} `json:"value,omitempty"`
+	Type  string                 `json:"type"`
+	Value map[string]interface{} `json:"value,omitempty"`
 }
 
 type WorkflowTask struct {
@@ -174,8 +174,8 @@ type TaskPosition struct {
 
 // Davis CoPilot types
 type DavisCopilotRequest struct {
-	Text    string                 `json:"text"`
-	Context []DavisCopilotContext  `json:"context,omitempty"`
+	Text    string                `json:"text"`
+	Context []DavisCopilotContext `json:"context,omitempty"`
 }
 
 type DavisCopilotContext struct {
@@ -184,16 +184,16 @@ type DavisCopilotContext struct {
 }
 
 type DavisCopilotResponse struct {
-	Text         string                  `json:"text,omitempty"`
-	Status       string                  `json:"status"`
-	MessageToken string                  `json:"messageToken,omitempty"`
-	Metadata     *DavisCopilotMetadata   `json:"metadata,omitempty"`
-	State        *DavisCopilotState      `json:"state,omitempty"`
+	Text         string                `json:"text,omitempty"`
+	Status       string                `json:"status"`
+	MessageToken string                `json:"messageToken,omitempty"`
+	Metadata     *DavisCopilotMetadata `json:"metadata,omitempty"`
+	State        *DavisCopilotState    `json:"state,omitempty"`
 }
 
 type DavisCopilotMetadata struct {
-	Sources       []DavisSource        `json:"sources,omitempty"`
-	Notifications []DavisNotification  `json:"notifications,omitempty"`
+	Sources       []DavisSource       `json:"sources,omitempty"`
+	Notifications []DavisNotification `json:"notifications,omitempty"`
 }
 
 type DavisSource struct {
@@ -216,10 +216,10 @@ type NL2DQLRequest struct {
 }
 
 type NL2DQLResponse struct {
-	DQL          string                 `json:"dql,omitempty"`
-	Status       string                 `json:"status"`
-	MessageToken string                 `json:"messageToken,omitempty"`
-	Metadata     *NL2DQLMetadata        `json:"metadata,omitempty"`
+	DQL          string          `json:"dql,omitempty"`
+	Status       string          `json:"status"`
+	MessageToken string          `json:"messageToken,omitempty"`
+	Metadata     *NL2DQLMetadata `json:"metadata,omitempty"`
 }
 
 type NL2DQLMetadata struct {
@@ -232,11 +232,11 @@ type DQL2NLRequest struct {
 }
 
 type DQL2NLResponse struct {
-	Summary      string            `json:"summary,omitempty"`
-	Explanation  string            `json:"explanation,omitempty"`
-	Status       string            `json:"status"`
-	MessageToken string            `json:"messageToken,omitempty"`
-	Metadata     *DQL2NLMetadata   `json:"metadata,omitempty"`
+	Summary      string          `json:"summary,omitempty"`
+	Explanation  string          `json:"explanation,omitempty"`
+	Status       string          `json:"status"`
+	MessageToken string          `json:"messageToken,omitempty"`
+	Metadata     *DQL2NLMetadata `json:"metadata,omitempty"`
 }
 
 type DQL2NLMetadata struct {
@@ -271,7 +271,7 @@ type DavisAnalyzerLog struct {
 
 // Email types
 type EmailRequest struct {
-	ToRecipients  EmailRecipients `json:"toRecipients"`
+	ToRecipients  EmailRecipients  `json:"toRecipients"`
 	CCRecipients  *EmailRecipients `json:"ccRecipients,omitempty"`
 	BCCRecipients *EmailRecipients `json:"bccRecipients,omitempty"`
 	Subject       string           `json:"subject"`
@@ -288,10 +288,10 @@ type EmailBody struct {
 }
 
 type EmailResponse struct {
-	RequestID              string   `json:"requestId"`
-	Message                string   `json:"message"`
-	InvalidDestinations    []string `json:"invalidDestinations,omitempty"`
-	BouncingDestinations   []string `json:"bouncingDestinations,omitempty"`
+	RequestID               string   `json:"requestId"`
+	Message                 string   `json:"message"`
+	InvalidDestinations     []string `json:"invalidDestinations,omitempty"`
+	BouncingDestinations    []string `json:"bouncingDestinations,omitempty"`
 	ComplainingDestinations []string `json:"complainingDestinations,omitempty"`
 }
 
@@ -311,8 +311,8 @@ type GrailBudgetState struct {
 }
 
 type GrailBudgetTracker struct {
-	state    GrailBudgetState
-	limitGB  int
+	state   GrailBudgetState
+	limitGB int
 }
 
 func NewGrailBudgetTracker(limitGB int) *GrailBudgetTracker {

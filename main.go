@@ -22,15 +22,15 @@ const (
 
 // Environment variable names
 const (
-	EnvLogDir          = "MCP_LOG_DIR"
-	EnvLogLevel        = "MCP_LOG_LEVEL"
-	EnvDTEnvironment   = "DT_ENVIRONMENT"
-	EnvDTPlatformToken = "DT_PLATFORM_TOKEN"
-	EnvOAuthClientID   = "OAUTH_CLIENT_ID"
+	EnvLogDir            = "MCP_LOG_DIR"
+	EnvLogLevel          = "MCP_LOG_LEVEL"
+	EnvDTEnvironment     = "DT_ENVIRONMENT"
+	EnvDTPlatformToken   = "DT_PLATFORM_TOKEN"
+	EnvOAuthClientID     = "OAUTH_CLIENT_ID"
 	EnvOAuthClientSecret = "OAUTH_CLIENT_SECRET"
-	EnvDTSSOURL        = "DT_SSO_URL"
-	EnvGrailBudgetGB   = "DT_GRAIL_QUERY_BUDGET_GB"
-	EnvSlackConnID     = "SLACK_CONNECTION_ID"
+	EnvDTSSOURL          = "DT_SSO_URL"
+	EnvGrailBudgetGB     = "DT_GRAIL_QUERY_BUDGET_GB"
+	EnvSlackConnID       = "SLACK_CONNECTION_ID"
 )
 
 func main() {

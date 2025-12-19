@@ -231,17 +231,17 @@ type ConfigValue struct {
 }
 
 type StartupInfo struct {
-	Version         string
-	GoVersion       string
-	OS              string
-	Arch            string
-	NumCPU          int
-	LogDir          ConfigValue
-	LogLevel        ConfigValue
-	DynatraceEnv    ConfigValue
-	GrailBudgetGB   int
-	PID             int
-	StartTime       time.Time
+	Version       string
+	GoVersion     string
+	OS            string
+	Arch          string
+	NumCPU        int
+	LogDir        ConfigValue
+	LogLevel      ConfigValue
+	DynatraceEnv  ConfigValue
+	GrailBudgetGB int
+	PID           int
+	StartTime     time.Time
 }
 
 func (l *Logger) LogStartup(info StartupInfo) {

@@ -14,9 +14,9 @@ import (
 
 // Registry holds all tool registrations
 type Registry struct {
-	client          *dynatrace.Client
-	logger          *logging.Logger
-	slackConnID     string
+	client      *dynatrace.Client
+	logger      *logging.Logger
+	slackConnID string
 }
 
 // NewRegistry creates a new tool registry

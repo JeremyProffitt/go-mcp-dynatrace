@@ -23,25 +23,25 @@ const (
 
 // Client is the Dynatrace API client
 type Client struct {
-	httpClient      *http.Client
-	baseURL         string
-	ssoURL          string
-	oauthClientID   string
+	httpClient        *http.Client
+	baseURL           string
+	ssoURL            string
+	oauthClientID     string
 	oauthClientSecret string
-	platformToken   string
-	scopes          []string
+	platformToken     string
+	scopes            []string
 
 	// Token management
-	accessToken     string
-	tokenExpiry     time.Time
-	tokenMu         sync.RWMutex
+	accessToken string
+	tokenExpiry time.Time
+	tokenMu     sync.RWMutex
 
 	// Budget tracking
-	budgetTracker   *GrailBudgetTracker
-	budgetMu        sync.Mutex
+	budgetTracker *GrailBudgetTracker
+	budgetMu      sync.Mutex
 
 	// Logger
-	logger          *logging.Logger
+	logger *logging.Logger
 }
 
 // Config holds client configuration
