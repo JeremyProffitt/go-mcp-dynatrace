@@ -45,9 +45,13 @@ export DT_ENVIRONMENT="https://abc12345.apps.dynatrace.com"
 # Authentication Option 1: OAuth credentials (recommended)
 export OAUTH_CLIENT_ID="dt0s02.XXXXXXXX"
 export OAUTH_CLIENT_SECRET="dt0s02.XXXXXXXX.XXXXXXXXXXXXXXXX"
+export DT_ACCOUNT_URN="urn:dtaccount:xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 
 # Authentication Option 2: Platform token
 export DT_PLATFORM_TOKEN="dt0c01.XXXXXXXX.XXXXXXXXXXXXXXXX"
+
+# Optional: Custom SSO URL (default: https://sso.dynatrace.com/sso/oauth2/token)
+export DT_SSO_URL="https://sso.dynatrace.com/sso/oauth2/token"
 
 # Optional: Slack integration
 export SLACK_CONNECTION_ID="your-slack-connection-id"
@@ -55,6 +59,8 @@ export SLACK_CONNECTION_ID="your-slack-connection-id"
 # Optional: Query budget (default: 1000 GB)
 export DT_GRAIL_QUERY_BUDGET_GB="500"
 ```
+
+> **Note**: When using OAuth authentication, the `DT_ACCOUNT_URN` is required. You can find your account UUID in the Dynatrace Account Management portal under Account Settings.
 
 ### Running
 
@@ -81,7 +87,8 @@ Add to your Claude Desktop configuration (`claude_desktop_config.json`):
       "env": {
         "DT_ENVIRONMENT": "https://abc12345.apps.dynatrace.com",
         "OAUTH_CLIENT_ID": "dt0s02.XXXXXXXX",
-        "OAUTH_CLIENT_SECRET": "dt0s02.XXXXXXXX.XXXXXXXXXXXXXXXX"
+        "OAUTH_CLIENT_SECRET": "dt0s02.XXXXXXXX.XXXXXXXXXXXXXXXX",
+        "DT_ACCOUNT_URN": "urn:dtaccount:xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
       }
     }
   }
@@ -106,7 +113,8 @@ Add to your Continue configuration (`config.json`):
           "env": {
             "DT_ENVIRONMENT": "https://abc12345.apps.dynatrace.com",
             "OAUTH_CLIENT_ID": "dt0s02.XXXXXXXX",
-            "OAUTH_CLIENT_SECRET": "dt0s02.XXXXXXXX.XXXXXXXXXXXXXXXX"
+            "OAUTH_CLIENT_SECRET": "dt0s02.XXXXXXXX.XXXXXXXXXXXXXXXX",
+            "DT_ACCOUNT_URN": "urn:dtaccount:xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
           }
         }
       }
@@ -130,6 +138,7 @@ experimental:
           DT_ENVIRONMENT: https://abc12345.apps.dynatrace.com
           OAUTH_CLIENT_ID: dt0s02.XXXXXXXX
           OAUTH_CLIENT_SECRET: dt0s02.XXXXXXXX.XXXXXXXXXXXXXXXX
+          DT_ACCOUNT_URN: urn:dtaccount:xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 ```
 
 ### Using Environment Variables
@@ -150,7 +159,8 @@ You can reference environment variables in your configuration to avoid hardcodin
           "env": {
             "DT_ENVIRONMENT": "${DT_ENVIRONMENT}",
             "OAUTH_CLIENT_ID": "${OAUTH_CLIENT_ID}",
-            "OAUTH_CLIENT_SECRET": "${OAUTH_CLIENT_SECRET}"
+            "OAUTH_CLIENT_SECRET": "${OAUTH_CLIENT_SECRET}",
+            "DT_ACCOUNT_URN": "${DT_ACCOUNT_URN}"
           }
         }
       }
@@ -172,6 +182,7 @@ experimental:
           DT_ENVIRONMENT: ${DT_ENVIRONMENT}
           OAUTH_CLIENT_ID: ${OAUTH_CLIENT_ID}
           OAUTH_CLIENT_SECRET: ${OAUTH_CLIENT_SECRET}
+          DT_ACCOUNT_URN: ${DT_ACCOUNT_URN}
 ```
 
 ## Available Tools
@@ -239,14 +250,16 @@ Options:
 | `DT_ENVIRONMENT` | Yes | URL to your Dynatrace Platform |
 | `OAUTH_CLIENT_ID` | * | OAuth client ID |
 | `OAUTH_CLIENT_SECRET` | * | OAuth client secret |
-| `DT_PLATFORM_TOKEN` | * | Platform authentication token |
+| `DT_ACCOUNT_URN` | * | Account URN for OAuth (format: `urn:dtaccount:<uuid>`) |
+| `DT_PLATFORM_TOKEN` | ** | Platform authentication token |
 | `DT_SSO_URL` | No | SSO URL (default: sso.dynatrace.com) |
 | `DT_GRAIL_QUERY_BUDGET_GB` | No | Grail query budget in GB (default: 1000) |
 | `SLACK_CONNECTION_ID` | No | Slack connector ID |
 | `MCP_LOG_DIR` | No | Log directory |
 | `MCP_LOG_LEVEL` | No | Log level |
 
-\* Either OAuth credentials or Platform token required
+\* Required for OAuth authentication
+\*\* Alternative to OAuth - use Platform token instead
 
 ## Logging
 
