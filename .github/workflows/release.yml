@@ -1,51 +1,23 @@
-name: Release
+name: Build and Release
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
-    inputs:
-      version:
-        description: 'Version tag (e.g., v1.0.0)'
-        required: true
-        default: 'v1.0.0'
 
 permissions:
   contents: write
 
 jobs:
-  build:
-    name: Build for ${{ matrix.os }}-${{ matrix.arch }}
-    runs-on: ${{ matrix.runner }}
+  test:
+    name: Test
+    runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        include:
-          # macOS ARM64 (M1/M2/M3)
-          - os: darwin
-            arch: arm64
-            runner: macos-latest
-            artifact: go-mcp-dynatrace-darwin-arm64
-          # macOS Intel
-          - os: darwin
-            arch: amd64
-            runner: macos-latest
-            artifact: go-mcp-dynatrace-darwin-amd64
-          # Linux AMD64
-          - os: linux
-            arch: amd64
-            runner: ubuntu-latest
-            artifact: go-mcp-dynatrace-linux-amd64
-          # Linux ARM64
-          - os: linux
-            arch: arm64
-            runner: ubuntu-latest
-            artifact: go-mcp-dynatrace-linux-arm64
-          # Windows AMD64
-          - os: windows
-            arch: amd64
-            runner: windows-latest
-            artifact: go-mcp-dynatrace-windows-amd64.exe
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        go-version: ['1.21', '1.22']
 
     steps:
       - name: Checkout code
@@ -54,103 +26,117 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.21'
+          go-version: ${{ matrix.go-version }}
 
-      - name: Get dependencies
+      - name: Download dependencies
         run: go mod download
 
-      - name: Build binary
-        env:
-          GOOS: ${{ matrix.os }}
-          GOARCH: ${{ matrix.arch }}
-          CGO_ENABLED: 0
-        run: |
-          go build -ldflags="-s -w -X main.Version=${{ github.ref_name || github.event.inputs.version }}" -o ${{ matrix.artifact }} .
+      - name: Run tests
+        shell: bash
+        run: go test -v -race ./...
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact }}
-          path: ${{ matrix.artifact }}
+  build:
+    name: Build
+    needs: test
+    runs-on: macos-latest
 
-  release:
-    name: Create Release
-    needs: build
-    runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Delete existing release if exists
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          TAG="${{ github.ref_name || github.event.inputs.version }}"
-          echo "Checking for existing release with tag: $TAG"
-          if gh release view "$TAG" > /dev/null 2>&1; then
-            echo "Existing release found. Deleting release (keeping tag for this build)..."
-            gh release delete "$TAG" --yes || true
-          else
-            echo "No existing release found for $TAG"
-          fi
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
         with:
-          path: artifacts
+          go-version: '1.22'
 
-      - name: Prepare release files
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Build for all platforms
         run: |
-          mkdir -p release
-          # macOS ARM64
-          cp artifacts/go-mcp-dynatrace-darwin-arm64/go-mcp-dynatrace-darwin-arm64 release/
-          chmod +x release/go-mcp-dynatrace-darwin-arm64
-          # macOS Intel
-          cp artifacts/go-mcp-dynatrace-darwin-amd64/go-mcp-dynatrace-darwin-amd64 release/
-          chmod +x release/go-mcp-dynatrace-darwin-amd64
-          # Linux AMD64
-          cp artifacts/go-mcp-dynatrace-linux-amd64/go-mcp-dynatrace-linux-amd64 release/
-          chmod +x release/go-mcp-dynatrace-linux-amd64
-          # Linux ARM64
-          cp artifacts/go-mcp-dynatrace-linux-arm64/go-mcp-dynatrace-linux-arm64 release/
-          chmod +x release/go-mcp-dynatrace-linux-arm64
+          mkdir -p dist
+
+          # Darwin (macOS) - build both architectures then create universal binary
+          GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o dist/go-mcp-dynatrace-darwin-amd64 .
+          GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o dist/go-mcp-dynatrace-darwin-arm64 .
+
+          # Create universal binary using lipo
+          lipo -create -output dist/go-mcp-dynatrace-darwin-universal \
+            dist/go-mcp-dynatrace-darwin-amd64 \
+            dist/go-mcp-dynatrace-darwin-arm64
+
+          # Remove individual architecture binaries
+          rm dist/go-mcp-dynatrace-darwin-amd64 dist/go-mcp-dynatrace-darwin-arm64
+
+          # Linux
+          GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o dist/go-mcp-dynatrace-linux-amd64 .
+          GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o dist/go-mcp-dynatrace-linux-arm64 .
+
           # Windows
-          cp artifacts/go-mcp-dynatrace-windows-amd64.exe/go-mcp-dynatrace-windows-amd64.exe release/
+          GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o dist/go-mcp-dynatrace-windows-amd64.exe .
 
       - name: Generate checksums
         run: |
-          cd release
-          sha256sum * > checksums.txt
-          cat checksums.txt
+          cd dist
+          shasum -a 256 * > checksums.txt
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries
+          path: dist/
+
+  release:
+    name: Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: binaries
+          path: dist/
+
+      - name: Delete existing release
+        run: |
+          gh release delete latest --yes --cleanup-tag || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: ${{ github.ref_name || github.event.inputs.version }}
-          name: Release ${{ github.ref_name || github.event.inputs.version }}
+          tag_name: latest
+          name: Latest Build
           body: |
-            ## go-mcp-dynatrace ${{ github.ref_name || github.event.inputs.version }}
+            Automated build from main branch.
+
+            ## go-mcp-dynatrace
 
             A Go implementation of the Dynatrace MCP Server - enabling LLMs to interact with Dynatrace for observability, security, and automation.
 
-            ### Downloads
+            ## Downloads
 
             | Platform | Architecture | File |
             |----------|--------------|------|
-            | macOS | Apple Silicon (M1/M2/M3) | `go-mcp-dynatrace-darwin-arm64` |
-            | macOS | Intel | `go-mcp-dynatrace-darwin-amd64` |
-            | Linux | x86_64 | `go-mcp-dynatrace-linux-amd64` |
-            | Linux | ARM64 | `go-mcp-dynatrace-linux-arm64` |
-            | Windows | x86_64 | `go-mcp-dynatrace-windows-amd64.exe` |
+            | macOS | Universal (Intel + Apple Silicon) | go-mcp-dynatrace-darwin-universal |
+            | Linux | x64 | go-mcp-dynatrace-linux-amd64 |
+            | Linux | ARM64 | go-mcp-dynatrace-linux-arm64 |
+            | Windows | x64 | go-mcp-dynatrace-windows-amd64.exe |
 
-            ### Installation
+            ## Installation
 
             1. Download the appropriate binary for your platform
             2. Make it executable (macOS/Linux): `chmod +x go-mcp-dynatrace-*`
             3. Configure environment variables (see README)
             4. Add to your Claude Desktop config or run directly
 
-            ### Features
+            ## Features
 
             - **17 MCP Tools** for Dynatrace integration
             - Problems, Vulnerabilities, and Entity querying
@@ -160,46 +146,15 @@ jobs:
             - Workflow automation
             - Email and Slack notifications
 
-            All binaries are statically compiled with CGO disabled for maximum portability.
+            ## Verification
+
+            Use the checksums.txt file to verify your download:
+            ```bash
+            shasum -a 256 -c checksums.txt
+            ```
           draft: false
           prerelease: false
           files: |
-            release/*
-
-      - name: Cleanup old releases (keep newest 5)
+            dist/*
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          echo "Fetching all releases..."
-          RELEASES=$(gh release list --limit 100 --json tagName,createdAt --jq 'sort_by(.createdAt) | reverse | .[5:] | .[].tagName')
-
-          if [ -z "$RELEASES" ]; then
-            echo "No old releases to delete (5 or fewer exist)"
-          else
-            echo "Deleting old releases (keeping newest 5)..."
-            for TAG in $RELEASES; do
-              echo "Deleting release: $TAG"
-              gh release delete "$TAG" --yes --cleanup-tag || true
-            done
-          fi
-
-  test:
-    name: Test
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.21'
-
-      - name: Get dependencies
-        run: go mod download
-
-      - name: Run tests
-        run: go test -v ./...
-
-      - name: Build test
-        run: go build -v .
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
