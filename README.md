@@ -132,6 +132,48 @@ experimental:
           OAUTH_CLIENT_SECRET: dt0s02.XXXXXXXX.XXXXXXXXXXXXXXXX
 ```
 
+### Using Environment Variables
+
+You can reference environment variables in your configuration to avoid hardcoding sensitive values.
+
+**JSON with environment variables:**
+
+```json
+{
+  "experimental": {
+    "modelContextProtocolServers": [
+      {
+        "transport": {
+          "type": "stdio",
+          "command": "/path/to/go-mcp-dynatrace",
+          "args": [],
+          "env": {
+            "DT_ENVIRONMENT": "${DT_ENVIRONMENT}",
+            "OAUTH_CLIENT_ID": "${OAUTH_CLIENT_ID}",
+            "OAUTH_CLIENT_SECRET": "${OAUTH_CLIENT_SECRET}"
+          }
+        }
+      }
+    ]
+  }
+}
+```
+
+**YAML with environment variables:**
+
+```yaml
+experimental:
+  modelContextProtocolServers:
+    - transport:
+        type: stdio
+        command: /path/to/go-mcp-dynatrace
+        args: []
+        env:
+          DT_ENVIRONMENT: ${DT_ENVIRONMENT}
+          OAUTH_CLIENT_ID: ${OAUTH_CLIENT_ID}
+          OAUTH_CLIENT_SECRET: ${OAUTH_CLIENT_SECRET}
+```
+
 ## Available Tools
 
 ### Data Query & Retrieval
