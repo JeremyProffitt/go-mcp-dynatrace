@@ -11,6 +11,8 @@ A Go implementation of the [Dynatrace MCP Server](https://github.com/dynatrace-o
 - **Automation**: Create and manage workflows, send notifications via email and Slack
 - **Budget Tracking**: Built-in Grail query budget management
 - **Comprehensive Logging**: File-based logging with configurable levels
+- **DQL Query Logging**: Optional file-based logging of all DQL queries for debugging and auditing
+- **MCP Resources**: DQL language reference available as an MCP resource
 
 ## Quick Start
 
@@ -254,6 +256,7 @@ Options:
 | `DT_PLATFORM_TOKEN` | ** | Platform authentication token |
 | `DT_SSO_URL` | No | SSO URL (default: sso.dynatrace.com) |
 | `DT_GRAIL_QUERY_BUDGET_GB` | No | Grail query budget in GB (default: 1000) |
+| `DT_LOG_DQL_QUERIES` | No | Log DQL queries to files (default: false) |
 | `SLACK_CONNECTION_ID` | No | Slack connector ID |
 | `MCP_LOG_DIR` | No | Log directory |
 | `MCP_LOG_LEVEL` | No | Log level |
@@ -274,6 +277,32 @@ Log levels:
 - `debug` - Detailed debugging
 
 **Security Note**: Logging never captures sensitive data like query results, tokens, or response content. Only operation metadata (endpoints, durations, record counts) is logged.
+
+### DQL Query Logging
+
+Enable DQL query file logging for debugging and auditing by setting:
+
+```bash
+export DT_LOG_DQL_QUERIES=true
+```
+
+When enabled, all DQL queries are saved to individual files:
+
+```
+~/go-mcp-dynatrace/logs/DQL/YYYYMMDD/{name}.YYYYMMDD.HHmmss.dql
+```
+
+Example:
+```
+~/go-mcp-dynatrace/logs/DQL/20260103/fetch_logs.20260103.142530.dql
+~/go-mcp-dynatrace/logs/DQL/20260103/list_problems.20260103.143215.dql
+```
+
+This is useful for:
+- Debugging query issues
+- Auditing what queries were executed
+- Reproducing queries in the Dynatrace UI
+- Building a library of working DQL queries
 
 ## OAuth Scopes Required
 
@@ -308,15 +337,19 @@ go-mcp-dynatrace/
 ├── main.go                 # Entry point
 ├── pkg/
 │   ├── mcp/               # MCP protocol implementation
-│   │   ├── server.go      # JSON-RPC server
+│   │   ├── server.go      # JSON-RPC server with resource support
 │   │   └── types.go       # Protocol types
 │   ├── dynatrace/         # Dynatrace API client
 │   │   ├── client.go      # HTTP client with OAuth
-│   │   └── types.go       # API types
+│   │   ├── types.go       # API types
+│   │   └── token_cache.go # OAuth token caching
+│   ├── dql/               # DQL language reference
+│   │   ├── reference.go   # Reference provider
+│   │   └── mcp_adapter.go # MCP resource adapter
 │   ├── tools/             # MCP tool implementations
 │   │   └── tools.go       # All tool handlers
 │   └── logging/           # Logging infrastructure
-│       └── logging.go     # Logger implementation
+│       └── logging.go     # Logger with DQL query file logging
 └── go.mod
 ```
 
