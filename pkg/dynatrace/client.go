@@ -36,6 +36,7 @@ type Client struct {
 	accessToken string
 	tokenExpiry time.Time
 	tokenMu     sync.RWMutex
+	tokenCache  *TokenCache
 
 	// Budget tracking
 	budgetTracker *GrailBudgetTracker
@@ -89,6 +90,16 @@ func NewClient(cfg Config) (*Client, error) {
 		budgetTracker:     NewGrailBudgetTracker(budgetGB),
 		logger:            cfg.Logger,
 		scopes:            getRequiredScopes(),
+		tokenCache:        NewTokenCache(),
+	}
+
+	// Try to load cached token
+	if cfg.OAuthClientID != "" && cfg.PlatformToken == "" {
+		if cached := client.tokenCache.Load(baseURL, cfg.OAuthClientID); cached != nil {
+			client.accessToken = cached.AccessToken
+			client.tokenExpiry = cached.ExpiresAt
+			logging.Info("Loaded cached OAuth token (expires in %s)", time.Until(cached.ExpiresAt).Round(time.Second))
+		}
 	}
 
 	return client, nil
@@ -184,6 +195,16 @@ func (c *Client) refreshToken(ctx context.Context) error {
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
+	// Log OAuth request at DEBUG level (credentials will be masked to show only last 4 chars)
+	logging.LogHTTPRequest("oauth_token", &logging.HTTPRequestInfo{
+		Method: "POST",
+		URL:    c.ssoURL,
+		Headers: map[string]string{
+			"Content-Type": "application/x-www-form-urlencoded",
+		},
+		Body: data.Encode(),
+	}, c.oauthClientID, c.oauthClientSecret)
+
 	startTime := time.Now()
 	resp, err := c.httpClient.Do(req)
 	duration := time.Since(startTime)
@@ -196,6 +217,12 @@ func (c *Client) refreshToken(ctx context.Context) error {
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
+
+	// Log OAuth response at DEBUG level
+	logging.LogHTTPResponse("oauth_token", &logging.HTTPResponseInfo{
+		StatusCode: resp.StatusCode,
+		Body:       string(body),
+	}, duration, c.oauthClientID, c.oauthClientSecret)
 
 	if resp.StatusCode != http.StatusOK {
 		err := fmt.Errorf("token request failed with status %d", resp.StatusCode)
@@ -218,6 +245,13 @@ func (c *Client) refreshToken(ctx context.Context) error {
 
 	c.accessToken = tokenResp.AccessToken
 	c.tokenExpiry = time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second)
+
+	// Cache the token for future use
+	if c.tokenCache != nil {
+		if err := c.tokenCache.Save(c.accessToken, c.baseURL, c.oauthClientID, c.tokenExpiry); err != nil {
+			logging.Debug("Failed to cache token: %v", err)
+		}
+	}
 
 	logging.AuthToken("oauth", time.Duration(tokenResp.ExpiresIn)*time.Second, nil)
 	logging.Debug("Token obtained successfully in %s", duration)
@@ -262,6 +296,18 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body interf
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 
+	// Log request at DEBUG level (token will be masked to show only last 4 chars)
+	logging.LogHTTPRequest("api_request", &logging.HTTPRequestInfo{
+		Method: method,
+		URL:    fullURL,
+		Headers: map[string]string{
+			"Authorization": "Bearer " + token,
+			"Content-Type":  "application/json",
+			"Accept":        "application/json",
+		},
+		Body: reqBodyStr,
+	}, token)
+
 	startTime := time.Now()
 	resp, err := c.httpClient.Do(req)
 	duration := time.Since(startTime)
@@ -282,6 +328,19 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body interf
 			},
 			Body: reqBodyStr,
 		}, nil, err, token)
+	} else {
+		// Log successful response at DEBUG level
+		// Note: Response body is read later by the caller, so we log headers only here
+		respHeaders := make(map[string]string)
+		for k, v := range resp.Header {
+			if len(v) > 0 {
+				respHeaders[k] = v[0]
+			}
+		}
+		logging.LogHTTPResponse("api_response", &logging.HTTPResponseInfo{
+			StatusCode: statusCode,
+			Headers:    respHeaders,
+		}, duration, token)
 	}
 
 	logging.APIRequest(method, path, statusCode, duration, err)

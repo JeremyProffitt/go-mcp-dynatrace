@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/dynatrace-oss/go-mcp-dynatrace/pkg/dql"
 	"github.com/dynatrace-oss/go-mcp-dynatrace/pkg/dynatrace"
 	"github.com/dynatrace-oss/go-mcp-dynatrace/pkg/logging"
 	"github.com/dynatrace-oss/go-mcp-dynatrace/pkg/mcp"
@@ -24,6 +25,7 @@ const (
 const (
 	EnvLogDir            = "MCP_LOG_DIR"
 	EnvLogLevel          = "MCP_LOG_LEVEL"
+	EnvLogDQLQueries     = "DT_LOG_DQL_QUERIES"
 	EnvDTEnvironment     = "DT_ENVIRONMENT"
 	EnvDTPlatformToken   = "DT_PLATFORM_TOKEN"
 	EnvOAuthClientID     = "OAUTH_CLIENT_ID"
@@ -84,11 +86,18 @@ func main() {
 	}
 	parsedLogLevel := logging.ParseLogLevel(resolvedLogLevel)
 
+	// Resolve DQL query logging (off by default)
+	logDQLQueries := false
+	if envVal := os.Getenv(EnvLogDQLQueries); envVal != "" {
+		logDQLQueries = envVal == "true" || envVal == "1" || envVal == "yes"
+	}
+
 	// Initialize logger
 	logger, err := logging.NewLogger(logging.Config{
-		LogDir:  resolvedLogDir,
-		AppName: AppName,
-		Level:   parsedLogLevel,
+		LogDir:        resolvedLogDir,
+		AppName:       AppName,
+		Level:         parsedLogLevel,
+		LogDQLQueries: logDQLQueries,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to initialize logger: %v\n", err)
@@ -125,6 +134,7 @@ func main() {
 		logging.ConfigValue{Value: resolvedLogLevel, Source: logLevelSource},
 		logging.ConfigValue{Value: dtEnvironment, Source: dtEnvSource},
 		grailBudgetGB,
+		logDQLQueries,
 	)
 	logger.LogStartup(startupInfo)
 
@@ -174,7 +184,20 @@ func main() {
 	registry := tools.NewRegistry(dtClient, logger, slackConnID)
 	registry.RegisterAll(server)
 
-	logger.Info("Registered all tools")
+	// Register DQL reference as a resource
+	dqlProvider := dql.NewReferenceProvider()
+	dqlAdapter := dql.NewMCPResourceAdapter(dqlProvider)
+	server.RegisterResourceProvider(dqlAdapter)
+
+	if dqlProvider.HasOverride() {
+		logger.Info("DQL reference: using custom override file")
+	} else if dqlProvider.HasCustomExtensions() {
+		logger.Info("DQL reference: loaded custom extensions")
+	} else {
+		logger.Info("DQL reference: using embedded default")
+	}
+
+	logger.Info("Registered all tools and resources")
 	fmt.Fprintf(os.Stderr, "Starting Dynatrace MCP Server v%s...\n", Version)
 
 	// Set up graceful shutdown
@@ -253,6 +276,9 @@ ENVIRONMENT VARIABLES (Authentication - one method required):
 
 ENVIRONMENT VARIABLES (Optional):
     DT_GRAIL_QUERY_BUDGET_GB   Grail query budget in GB (default: 1000)
+    DT_LOG_DQL_QUERIES         Log DQL queries to files (default: false)
+                               When enabled, queries are saved to:
+                               {log_dir}/DQL/YYYYMMDD/{name}.YYYYMMDD.HHmmss.dql
     SLACK_CONNECTION_ID        Slack connector ID for sending Slack messages
     MCP_LOG_DIR                Override default log directory
     MCP_LOG_LEVEL              Override default log level

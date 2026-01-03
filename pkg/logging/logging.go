@@ -73,19 +73,21 @@ func ParseLogLevel(s string) LogLevel {
 }
 
 type Logger struct {
-	mu        sync.Mutex
-	level     LogLevel
-	logger    *log.Logger
-	file      *os.File
-	logDir    string
-	appName   string
-	startTime time.Time
+	mu             sync.Mutex
+	level          LogLevel
+	logger         *log.Logger
+	file           *os.File
+	logDir         string
+	appName        string
+	startTime      time.Time
+	logDQLQueries  bool
 }
 
 type Config struct {
-	LogDir  string
-	AppName string
-	Level   LogLevel
+	LogDir        string
+	AppName       string
+	Level         LogLevel
+	LogDQLQueries bool
 }
 
 var (
@@ -133,12 +135,13 @@ func NewLogger(cfg Config) (*Logger, error) {
 	}
 
 	l := &Logger{
-		level:     cfg.Level,
-		logger:    log.New(file, "", 0),
-		file:      file,
-		logDir:    logDir,
-		appName:   cfg.AppName,
-		startTime: time.Now(),
+		level:         cfg.Level,
+		logger:        log.New(file, "", 0),
+		file:          file,
+		logDir:        logDir,
+		appName:       cfg.AppName,
+		startTime:     time.Now(),
+		logDQLQueries: cfg.LogDQLQueries,
 	}
 
 	return l, nil
@@ -210,6 +213,82 @@ func (l *Logger) DQLQuery(query string, recordCount int, bytesScanned int64, dur
 	}
 }
 
+// SaveDQLQueryToFile saves a DQL query to a file if DQL query logging is enabled.
+// Files are saved to {logDir}/DQL/YYYYMMDD/{descriptiveName}.YYYYMMDD.HHmmss.dql
+func (l *Logger) SaveDQLQueryToFile(query string, descriptiveName string) error {
+	if l == nil || !l.logDQLQueries {
+		return nil
+	}
+
+	now := time.Now()
+	dateDir := now.Format("20060102")
+	timestamp := now.Format("20060102.150405")
+
+	// Create DQL subdirectory: {logDir}/DQL/YYYYMMDD
+	dqlDir := filepath.Join(l.logDir, "DQL", dateDir)
+	if err := os.MkdirAll(dqlDir, 0755); err != nil {
+		l.Error("Failed to create DQL log directory %s: %v", dqlDir, err)
+		return fmt.Errorf("failed to create DQL log directory: %w", err)
+	}
+
+	// Sanitize descriptive name for use in filename
+	safeName := sanitizeFilename(descriptiveName)
+	if safeName == "" {
+		safeName = "query"
+	}
+
+	// Create filename: {descriptiveName}.YYYYMMDD.HHmmss.dql
+	filename := fmt.Sprintf("%s.%s.dql", safeName, timestamp)
+	filePath := filepath.Join(dqlDir, filename)
+
+	// Write query to file
+	if err := os.WriteFile(filePath, []byte(query), 0644); err != nil {
+		l.Error("Failed to write DQL query to file %s: %v", filePath, err)
+		return fmt.Errorf("failed to write DQL query to file: %w", err)
+	}
+
+	l.Debug("DQL query saved to %s", filePath)
+	return nil
+}
+
+// sanitizeFilename removes or replaces characters that are invalid in filenames
+func sanitizeFilename(name string) string {
+	// Replace common invalid characters with underscores
+	replacer := strings.NewReplacer(
+		"/", "_",
+		"\\", "_",
+		":", "_",
+		"*", "_",
+		"?", "_",
+		"\"", "_",
+		"<", "_",
+		">", "_",
+		"|", "_",
+		"\n", "_",
+		"\r", "_",
+		"\t", "_",
+	)
+	sanitized := replacer.Replace(name)
+
+	// Remove leading/trailing spaces and dots
+	sanitized = strings.Trim(sanitized, " .")
+
+	// Truncate if too long (max 100 chars for the descriptive part)
+	if len(sanitized) > 100 {
+		sanitized = sanitized[:100]
+	}
+
+	return sanitized
+}
+
+// IsDQLQueryLoggingEnabled returns whether DQL query logging is enabled
+func (l *Logger) IsDQLQueryLoggingEnabled() bool {
+	if l == nil {
+		return false
+	}
+	return l.logDQLQueries
+}
+
 func (l *Logger) ToolCall(toolName string, args map[string]interface{}, duration time.Duration, success bool) {
 	argKeys := make([]string, 0, len(args))
 	for k := range args {
@@ -233,17 +312,18 @@ type ConfigValue struct {
 }
 
 type StartupInfo struct {
-	Version       string
-	GoVersion     string
-	OS            string
-	Arch          string
-	NumCPU        int
-	LogDir        ConfigValue
-	LogLevel      ConfigValue
-	DynatraceEnv  ConfigValue
-	GrailBudgetGB int
-	PID           int
-	StartTime     time.Time
+	Version        string
+	GoVersion      string
+	OS             string
+	Arch           string
+	NumCPU         int
+	LogDir         ConfigValue
+	LogLevel       ConfigValue
+	DynatraceEnv   ConfigValue
+	GrailBudgetGB  int
+	LogDQLQueries  bool
+	PID            int
+	StartTime      time.Time
 }
 
 func (l *Logger) LogStartup(info StartupInfo) {
@@ -265,6 +345,7 @@ func (l *Logger) LogStartup(info StartupInfo) {
 	l.Info("Log Level: %s [%s]", info.LogLevel.Value, info.LogLevel.Source)
 	l.Info("Dynatrace Environment: %s [%s]", info.DynatraceEnv.Value, info.DynatraceEnv.Source)
 	l.Info("Grail Budget: %d GB [default]", info.GrailBudgetGB)
+	l.Info("Log DQL Queries: %v", info.LogDQLQueries)
 	l.Info("========================================")
 }
 
@@ -288,7 +369,7 @@ func (l *Logger) SetOutput(w io.Writer) {
 	l.logger.SetOutput(w)
 }
 
-func GetStartupInfo(version string, logDir ConfigValue, logLevel ConfigValue, dtEnv ConfigValue, grailBudgetGB int) StartupInfo {
+func GetStartupInfo(version string, logDir ConfigValue, logLevel ConfigValue, dtEnv ConfigValue, grailBudgetGB int, logDQLQueries bool) StartupInfo {
 	return StartupInfo{
 		Version:       version,
 		GoVersion:     runtime.Version(),
@@ -299,6 +380,7 @@ func GetStartupInfo(version string, logDir ConfigValue, logLevel ConfigValue, dt
 		LogLevel:      logLevel,
 		DynatraceEnv:  dtEnv,
 		GrailBudgetGB: grailBudgetGB,
+		LogDQLQueries: logDQLQueries,
 		PID:           os.Getpid(),
 		StartTime:     time.Now(),
 	}
@@ -368,6 +450,8 @@ var (
 	panPattern = regexp.MustCompile(`\b(\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{1,7})\b`)
 	// Additional PAN pattern for continuous digits
 	panContinuousPattern = regexp.MustCompile(`\b(\d{13,19})\b`)
+	// JSON token patterns - mask access_token, token, api_key, secret values in JSON
+	jsonTokenPattern = regexp.MustCompile(`("(?:access_token|token|api_key|apikey|secret|password|credential|bearer)":\s*")([^"]+)(")`)
 )
 
 // MaskSecret masks a secret value showing only the last 4 characters
@@ -385,6 +469,7 @@ func MaskSecret(secret string) string {
 // SanitizePII removes or masks PII data from log messages
 // - SSNs are replaced with [SSN-REDACTED]
 // - PANs (credit card numbers) are replaced with [PAN-REDACTED]
+// - JSON token values are masked to show only last 4 characters
 func SanitizePII(message string) string {
 	// Mask SSNs
 	message = ssnPattern.ReplaceAllString(message, "[SSN-REDACTED]")
@@ -392,6 +477,15 @@ func SanitizePII(message string) string {
 	message = panPattern.ReplaceAllString(message, "[PAN-REDACTED]")
 	// Mask continuous digit PANs
 	message = panContinuousPattern.ReplaceAllString(message, "[PAN-REDACTED]")
+	// Mask JSON token values (show only last 4 chars)
+	message = jsonTokenPattern.ReplaceAllStringFunc(message, func(match string) string {
+		parts := jsonTokenPattern.FindStringSubmatch(match)
+		if len(parts) == 4 {
+			// parts[1] = key and opening quote, parts[2] = value, parts[3] = closing quote
+			return parts[1] + MaskSecret(parts[2]) + parts[3]
+		}
+		return match
+	})
 	return message
 }
 
@@ -532,11 +626,82 @@ func (l *Logger) LogTokenError(tokenType, ssoURL, clientID, clientSecret string,
 		tokenType, ssoURL, maskedClientID, maskedClientSecret, statusCode, sanitizedBody, errStr)
 }
 
+// LogHTTPRequest logs HTTP request details at DEBUG level with PII filtering
+func (l *Logger) LogHTTPRequest(context string, req *HTTPRequestInfo, secrets ...string) {
+	if l == nil || LevelDebug > l.level {
+		return
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("HTTP_REQUEST context=%q", context))
+
+	if req != nil {
+		sb.WriteString(fmt.Sprintf(" method=%s url=%q", req.Method, req.URL))
+		if len(req.Headers) > 0 {
+			sanitizedHeaders := sanitizeHeaders(req.Headers)
+			sb.WriteString(fmt.Sprintf(" headers=%s", formatHeaders(sanitizedHeaders)))
+		}
+		if req.Body != "" {
+			sanitizedBody := SanitizeAndMaskSecrets(req.Body, secrets...)
+			// Truncate long bodies
+			if len(sanitizedBody) > 500 {
+				sanitizedBody = sanitizedBody[:500] + "...[truncated]"
+			}
+			sb.WriteString(fmt.Sprintf(" body=%q", sanitizedBody))
+		}
+	}
+
+	l.Debug(sb.String())
+}
+
+// LogHTTPResponse logs HTTP response details at DEBUG level with PII filtering
+func (l *Logger) LogHTTPResponse(context string, resp *HTTPResponseInfo, duration time.Duration, secrets ...string) {
+	if l == nil || LevelDebug > l.level {
+		return
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("HTTP_RESPONSE context=%q", context))
+
+	if resp != nil {
+		sb.WriteString(fmt.Sprintf(" status=%d", resp.StatusCode))
+		if len(resp.Headers) > 0 {
+			sanitizedHeaders := sanitizeHeaders(resp.Headers)
+			sb.WriteString(fmt.Sprintf(" headers=%s", formatHeaders(sanitizedHeaders)))
+		}
+		if resp.Body != "" {
+			sanitizedBody := SanitizeAndMaskSecrets(resp.Body, secrets...)
+			// Truncate long bodies
+			if len(sanitizedBody) > 1000 {
+				sanitizedBody = sanitizedBody[:1000] + "...[truncated]"
+			}
+			sb.WriteString(fmt.Sprintf(" body=%q", sanitizedBody))
+		}
+	}
+
+	sb.WriteString(fmt.Sprintf(" duration=%s", duration))
+	l.Debug(sb.String())
+}
+
 // Global convenience functions for HTTP error logging
 
 func LogHTTPError(context string, req *HTTPRequestInfo, resp *HTTPResponseInfo, err error, secrets ...string) {
 	if defaultLogger != nil {
 		defaultLogger.LogHTTPError(context, req, resp, err, secrets...)
+	}
+}
+
+// LogHTTPRequest is the global convenience function for HTTP request logging
+func LogHTTPRequest(context string, req *HTTPRequestInfo, secrets ...string) {
+	if defaultLogger != nil {
+		defaultLogger.LogHTTPRequest(context, req, secrets...)
+	}
+}
+
+// LogHTTPResponse is the global convenience function for HTTP response logging
+func LogHTTPResponse(context string, resp *HTTPResponseInfo, duration time.Duration, secrets ...string) {
+	if defaultLogger != nil {
+		defaultLogger.LogHTTPResponse(context, resp, duration, secrets...)
 	}
 }
 

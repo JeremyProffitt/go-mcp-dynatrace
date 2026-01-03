@@ -92,6 +92,49 @@ func getBool(args map[string]interface{}, key string, defaultVal bool) bool {
 	return defaultVal
 }
 
+// deriveDQLQueryName extracts a descriptive name from a DQL query for file logging
+func deriveDQLQueryName(query string) string {
+	// Trim whitespace and get the first line
+	query = strings.TrimSpace(query)
+	lines := strings.Split(query, "\n")
+	if len(lines) == 0 {
+		return "query"
+	}
+
+	firstLine := strings.TrimSpace(lines[0])
+
+	// Extract the command (fetch, smartscapeNodes, etc.)
+	parts := strings.Fields(firstLine)
+	if len(parts) == 0 {
+		return "query"
+	}
+
+	command := parts[0]
+
+	// Build a descriptive name based on the command and first argument
+	switch command {
+	case "fetch":
+		if len(parts) > 1 {
+			// e.g., "fetch logs" -> "fetch_logs", "fetch dt.davis.problems" -> "fetch_dt.davis.problems"
+			dataSource := strings.Split(parts[1], ",")[0] // Remove trailing comma if present
+			return "fetch_" + dataSource
+		}
+		return "fetch"
+	case "smartscapeNodes":
+		if len(parts) > 1 {
+			// e.g., smartscapeNodes "*" -> "smartscape_all", smartscapeNodes "host" -> "smartscape_host"
+			nodeType := strings.Trim(parts[1], "\"")
+			if nodeType == "*" {
+				return "smartscape_all"
+			}
+			return "smartscape_" + nodeType
+		}
+		return "smartscape"
+	default:
+		return command
+	}
+}
+
 func getStringArray(args map[string]interface{}, key string) []string {
 	if val, ok := args[key].([]interface{}); ok {
 		result := make([]string, 0, len(val))
@@ -212,6 +255,9 @@ func (r *Registry) registerListProblems(server *mcp.Server) {
 			return errorResult(fmt.Sprintf("Failed to list problems: %s", err.Error())), nil
 		}
 
+		// Log DQL query to file if enabled
+		r.logger.SaveDQLQueryToFile(query, "list_problems")
+
 		if result.Result == nil || len(result.Result.Records) == 0 {
 			return textResult("No problems found"), nil
 		}
@@ -301,6 +347,9 @@ func (r *Registry) registerListVulnerabilities(server *mcp.Server) {
 			return errorResult(fmt.Sprintf("Failed to list vulnerabilities: %s", err.Error())), nil
 		}
 
+		// Log DQL query to file if enabled
+		r.logger.SaveDQLQueryToFile(query, "list_vulnerabilities")
+
 		if result.Result == nil || len(result.Result.Records) == 0 {
 			return textResult("No vulnerabilities found in the last 30 days"), nil
 		}
@@ -386,6 +435,9 @@ func (r *Registry) registerFindEntityByName(server *mcp.Server) {
 			return errorResult(fmt.Sprintf("Failed to find entities: %s", err.Error())), nil
 		}
 
+		// Log DQL query to file if enabled
+		r.logger.SaveDQLQueryToFile(query, "find_entity_by_name")
+
 		if result.Result == nil || len(result.Result.Records) == 0 {
 			return textResult("No monitored entity found with the specified name. Try broadening your search or checking for typos."), nil
 		}
@@ -469,6 +521,10 @@ func (r *Registry) registerExecuteDQL(server *mcp.Server) {
 		if result.Error != nil {
 			return errorResult(fmt.Sprintf("DQL error: %s", result.Error.Message)), nil
 		}
+
+		// Log DQL query to file if enabled
+		queryName := deriveDQLQueryName(dqlStatement)
+		r.logger.SaveDQLQueryToFile(dqlStatement, queryName)
 
 		resp := "**DQL Query Results**\n\n"
 
@@ -964,6 +1020,9 @@ func (r *Registry) registerGetKubernetesEvents(server *mcp.Server) {
 			return errorResult(fmt.Sprintf("Failed to get K8s events: %s", err.Error())), nil
 		}
 
+		// Log DQL query to file if enabled
+		r.logger.SaveDQLQueryToFile(query, "kubernetes_events")
+
 		if result.Result == nil || len(result.Result.Records) == 0 {
 			return textResult("No events found for the specified Kubernetes cluster."), nil
 		}
@@ -1038,6 +1097,9 @@ func (r *Registry) registerListExceptions(server *mcp.Server) {
 		if err != nil {
 			return errorResult(fmt.Sprintf("Failed to list exceptions: %s", err.Error())), nil
 		}
+
+		// Log DQL query to file if enabled
+		r.logger.SaveDQLQueryToFile(query, "list_exceptions")
 
 		if result.Result == nil || len(result.Result.Records) == 0 {
 			return textResult("No exceptions found"), nil

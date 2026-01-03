@@ -28,7 +28,13 @@ type ServerInfo struct {
 }
 
 type ServerCapabilities struct {
-	Tools *ToolsCapability `json:"tools,omitempty"`
+	Tools     *ToolsCapability     `json:"tools,omitempty"`
+	Resources *ResourcesCapability `json:"resources,omitempty"`
+}
+
+type ResourcesCapability struct {
+	Subscribe   bool `json:"subscribe,omitempty"`
+	ListChanged bool `json:"listChanged,omitempty"`
 }
 
 type ToolsCapability struct {
@@ -124,3 +130,30 @@ const (
 	InvalidParams  = -32602
 	InternalError  = -32603
 )
+
+// Resource types
+type Resource struct {
+	URI         string `json:"uri"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	MimeType    string `json:"mimeType,omitempty"`
+}
+
+type ListResourcesResult struct {
+	Resources []Resource `json:"resources"`
+}
+
+type ReadResourceParams struct {
+	URI string `json:"uri"`
+}
+
+type ReadResourceResult struct {
+	Contents []ResourceContent `json:"contents"`
+}
+
+type ResourceContent struct {
+	URI      string `json:"uri"`
+	MimeType string `json:"mimeType,omitempty"`
+	Text     string `json:"text,omitempty"`
+	Blob     string `json:"blob,omitempty"` // base64 encoded for binary
+}

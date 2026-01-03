@@ -14,6 +14,14 @@ import (
 // ToolHandler is a function that handles a tool call
 type ToolHandler func(arguments map[string]interface{}) (*CallToolResult, error)
 
+// ResourceProvider is an interface for providing MCP resources
+type ResourceProvider interface {
+	// ListResources returns the available resources
+	ListResources() []Resource
+	// ReadResource reads a resource by URI, returns content and mimeType
+	ReadResource(uri string) (content string, mimeType string, err error)
+}
+
 // Server represents an MCP server
 type Server struct {
 	name     string
@@ -24,6 +32,9 @@ type Server struct {
 	stdin    io.Reader
 	stdout   io.Writer
 	stderr   io.Writer
+
+	// Resources
+	resourceProviders []ResourceProvider
 
 	// Rate limiting
 	toolCallTimestamps []time.Time
@@ -41,6 +52,7 @@ func NewServer(name, version string) *Server {
 		version:            version,
 		tools:              make([]Tool, 0),
 		handlers:           make(map[string]ToolHandler),
+		resourceProviders:  make([]ResourceProvider, 0),
 		stdin:              os.Stdin,
 		stdout:             os.Stdout,
 		stderr:             os.Stderr,
@@ -64,6 +76,13 @@ func (s *Server) RegisterTool(tool Tool, handler ToolHandler) {
 	defer s.mu.Unlock()
 	s.tools = append(s.tools, tool)
 	s.handlers[tool.Name] = handler
+}
+
+// RegisterResourceProvider registers a resource provider
+func (s *Server) RegisterResourceProvider(provider ResourceProvider) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.resourceProviders = append(s.resourceProviders, provider)
 }
 
 // checkRateLimit returns true if the request should be rate limited
@@ -246,6 +265,18 @@ func (s *Server) handleRequest(request *JSONRPCRequest) *JSONRPCResponse {
 		} else {
 			response.Result = result
 		}
+	case "resources/list":
+		response.Result = s.handleListResources()
+	case "resources/read":
+		result, err := s.handleReadResource(request.Params)
+		if err != nil {
+			response.Error = &JSONRPCError{
+				Code:    InternalError,
+				Message: err.Error(),
+			}
+		} else {
+			response.Result = result
+		}
 	case "ping":
 		response.Result = map[string]interface{}{}
 	default:
@@ -259,13 +290,27 @@ func (s *Server) handleRequest(request *JSONRPCRequest) *JSONRPCResponse {
 }
 
 func (s *Server) handleInitialize(params interface{}) *InitializeResult {
+	capabilities := ServerCapabilities{
+		Tools: &ToolsCapability{
+			ListChanged: false,
+		},
+	}
+
+	// Add resources capability if we have any resource providers
+	s.mu.RLock()
+	hasResources := len(s.resourceProviders) > 0
+	s.mu.RUnlock()
+
+	if hasResources {
+		capabilities.Resources = &ResourcesCapability{
+			Subscribe:   false,
+			ListChanged: false,
+		}
+	}
+
 	return &InitializeResult{
 		ProtocolVersion: "2024-11-05",
-		Capabilities: ServerCapabilities{
-			Tools: &ToolsCapability{
-				ListChanged: false,
-			},
-		},
+		Capabilities:    capabilities,
 		ServerInfo: ServerInfo{
 			Name:    s.name,
 			Version: s.version,
@@ -279,6 +324,54 @@ func (s *Server) handleListTools() *ListToolsResult {
 	return &ListToolsResult{
 		Tools: s.tools,
 	}
+}
+
+func (s *Server) handleListResources() *ListResourcesResult {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	resources := make([]Resource, 0)
+	for _, provider := range s.resourceProviders {
+		resources = append(resources, provider.ListResources()...)
+	}
+
+	return &ListResourcesResult{
+		Resources: resources,
+	}
+}
+
+func (s *Server) handleReadResource(params interface{}) (*ReadResourceResult, error) {
+	paramsMap, ok := params.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("invalid params type")
+	}
+
+	uri, ok := paramsMap["uri"].(string)
+	if !ok {
+		return nil, fmt.Errorf("missing resource URI")
+	}
+
+	s.mu.RLock()
+	providers := s.resourceProviders
+	s.mu.RUnlock()
+
+	// Try each provider until we find one that can handle the URI
+	for _, provider := range providers {
+		content, mimeType, err := provider.ReadResource(uri)
+		if err == nil {
+			return &ReadResourceResult{
+				Contents: []ResourceContent{
+					{
+						URI:      uri,
+						MimeType: mimeType,
+						Text:     content,
+					},
+				},
+			}, nil
+		}
+	}
+
+	return nil, fmt.Errorf("resource not found: %s", uri)
 }
 
 func (s *Server) handleCallTool(params interface{}) (*CallToolResult, error) {
