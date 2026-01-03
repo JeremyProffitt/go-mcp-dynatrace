@@ -152,9 +152,14 @@ jobs:
             ```bash
             shasum -a 256 -c checksums.txt
             ```
-          draft: false
+          draft: true
           prerelease: false
           files: |
             dist/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish Release
+        run: gh release edit latest --draft=false
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
