@@ -29,6 +29,7 @@ const (
 	EnvOAuthClientID     = "OAUTH_CLIENT_ID"
 	EnvOAuthClientSecret = "OAUTH_CLIENT_SECRET"
 	EnvDTSSOURL          = "DT_SSO_URL"
+	EnvDTAccountURN      = "DT_ACCOUNT_URN"
 	EnvGrailBudgetGB     = "DT_GRAIL_QUERY_BUDGET_GB"
 	EnvSlackConnID       = "SLACK_CONNECTION_ID"
 )
@@ -106,6 +107,7 @@ func main() {
 	oauthClientID := os.Getenv(EnvOAuthClientID)
 	oauthClientSecret := os.Getenv(EnvOAuthClientSecret)
 	ssoURL := os.Getenv(EnvDTSSOURL)
+	accountURN := os.Getenv(EnvDTAccountURN)
 	slackConnID := os.Getenv(EnvSlackConnID)
 
 	grailBudgetGB := 1000 // Default
@@ -135,6 +137,7 @@ func main() {
 		OAuthClientSecret: oauthClientSecret,
 		PlatformToken:     dtPlatformToken,
 		SSOURL:            ssoURL,
+		AccountURN:        accountURN,
 		GrailBudgetGB:     grailBudgetGB,
 		Logger:            logger,
 	})
@@ -244,6 +247,8 @@ ENVIRONMENT VARIABLES (Authentication - one method required):
 
     OAUTH_CLIENT_ID         OAuth client ID
     OAUTH_CLIENT_SECRET     OAuth client secret
+    DT_ACCOUNT_URN          Account URN for OAuth (required for OAuth)
+                            Format: urn:dtaccount:<account-uuid>
     DT_SSO_URL              SSO URL (default: https://sso.dynatrace.com/sso/oauth2/token)
 
 ENVIRONMENT VARIABLES (Optional):
@@ -257,6 +262,7 @@ EXAMPLES:
     export DT_ENVIRONMENT="https://abc12345.apps.dynatrace.com"
     export OAUTH_CLIENT_ID="dt0s02.XXXXXXXX"
     export OAUTH_CLIENT_SECRET="dt0s02.XXXXXXXX.XXXXXXXXXXXXXXXX"
+    export DT_ACCOUNT_URN="urn:dtaccount:xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
     %s
 
     # Run in HTTP mode

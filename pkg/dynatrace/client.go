@@ -29,6 +29,7 @@ type Client struct {
 	oauthClientID     string
 	oauthClientSecret string
 	platformToken     string
+	accountURN        string
 	scopes            []string
 
 	// Token management
@@ -51,6 +52,7 @@ type Config struct {
 	OAuthClientSecret string
 	PlatformToken     string
 	SSOURL            string
+	AccountURN        string
 	GrailBudgetGB     int
 	Logger            *logging.Logger
 }
@@ -83,6 +85,7 @@ func NewClient(cfg Config) (*Client, error) {
 		oauthClientID:     cfg.OAuthClientID,
 		oauthClientSecret: cfg.OAuthClientSecret,
 		platformToken:     cfg.PlatformToken,
+		accountURN:        cfg.AccountURN,
 		budgetTracker:     NewGrailBudgetTracker(budgetGB),
 		logger:            cfg.Logger,
 		scopes:            getRequiredScopes(),
@@ -160,11 +163,19 @@ func (c *Client) refreshToken(ctx context.Context) error {
 		return err
 	}
 
+	if c.accountURN == "" {
+		err := fmt.Errorf("DT_ACCOUNT_URN is required for OAuth authentication (format: urn:dtaccount:<account-uuid>)")
+		logging.LogTokenError("oauth", c.ssoURL, c.oauthClientID, c.oauthClientSecret, 0, "", err)
+		return err
+	}
+
 	data := url.Values{}
 	data.Set("grant_type", "client_credentials")
 	data.Set("client_id", c.oauthClientID)
 	data.Set("client_secret", c.oauthClientSecret)
-	data.Set("scope", strings.Join(c.scopes, " "))
+	data.Set("resource", c.accountURN)
+	// Note: scope is omitted as it can conflict with resource parameter
+	// Scopes should be configured on the OAuth client in Dynatrace
 
 	req, err := http.NewRequestWithContext(ctx, "POST", c.ssoURL, strings.NewReader(data.Encode()))
 	if err != nil {
