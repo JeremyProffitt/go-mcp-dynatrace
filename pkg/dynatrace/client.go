@@ -155,7 +155,9 @@ func (c *Client) refreshToken(ctx context.Context) error {
 
 	// OAuth client credentials flow
 	if c.oauthClientID == "" || c.oauthClientSecret == "" {
-		return fmt.Errorf("OAuth credentials required: set OAUTH_CLIENT_ID and OAUTH_CLIENT_SECRET")
+		err := fmt.Errorf("OAuth credentials required: set OAUTH_CLIENT_ID and OAUTH_CLIENT_SECRET")
+		logging.LogTokenError("oauth", c.ssoURL, c.oauthClientID, c.oauthClientSecret, 0, "", err)
+		return err
 	}
 
 	data := url.Values{}
@@ -166,6 +168,7 @@ func (c *Client) refreshToken(ctx context.Context) error {
 
 	req, err := http.NewRequestWithContext(ctx, "POST", c.ssoURL, strings.NewReader(data.Encode()))
 	if err != nil {
+		logging.LogTokenError("oauth", c.ssoURL, c.oauthClientID, c.oauthClientSecret, 0, "", err)
 		return fmt.Errorf("failed to create token request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -175,16 +178,19 @@ func (c *Client) refreshToken(ctx context.Context) error {
 	duration := time.Since(startTime)
 
 	if err != nil {
+		logging.LogTokenError("oauth", c.ssoURL, c.oauthClientID, c.oauthClientSecret, 0, "", err)
 		logging.AuthToken("oauth", 0, err)
 		return fmt.Errorf("failed to get token: %w", err)
 	}
 	defer resp.Body.Close()
 
+	body, _ := io.ReadAll(resp.Body)
+
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		err := fmt.Errorf("token request failed with status %d: %s", resp.StatusCode, string(body))
+		err := fmt.Errorf("token request failed with status %d", resp.StatusCode)
+		logging.LogTokenError("oauth", c.ssoURL, c.oauthClientID, c.oauthClientSecret, resp.StatusCode, string(body), err)
 		logging.AuthToken("oauth", 0, err)
-		return err
+		return fmt.Errorf("token request failed with status %d: %s", resp.StatusCode, logging.SanitizeAndMaskSecrets(string(body), c.oauthClientID, c.oauthClientSecret))
 	}
 
 	var tokenResp struct {
@@ -194,7 +200,8 @@ func (c *Client) refreshToken(ctx context.Context) error {
 		Scope       string `json:"scope"`
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
+	if err := json.Unmarshal(body, &tokenResp); err != nil {
+		logging.LogTokenError("oauth", c.ssoURL, c.oauthClientID, c.oauthClientSecret, resp.StatusCode, string(body), err)
 		return fmt.Errorf("failed to decode token response: %w", err)
 	}
 
@@ -215,17 +222,24 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body interf
 	}
 
 	var reqBody io.Reader
+	var reqBodyStr string
 	if body != nil {
 		jsonBody, err := json.Marshal(body)
 		if err != nil {
 			return nil, fmt.Errorf("failed to marshal request body: %w", err)
 		}
+		reqBodyStr = string(jsonBody)
 		reqBody = bytes.NewReader(jsonBody)
 	}
 
 	fullURL := c.baseURL + path
 	req, err := http.NewRequestWithContext(ctx, method, fullURL, reqBody)
 	if err != nil {
+		logging.LogHTTPError("create_request", &logging.HTTPRequestInfo{
+			Method: method,
+			URL:    fullURL,
+			Body:   reqBodyStr,
+		}, nil, err, c.accessToken)
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
@@ -246,26 +260,63 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body interf
 		statusCode = resp.StatusCode
 	}
 
+	// Log detailed error information on network errors
+	if err != nil {
+		logging.LogHTTPError("http_request", &logging.HTTPRequestInfo{
+			Method: method,
+			URL:    fullURL,
+			Headers: map[string]string{
+				"Authorization": "Bearer " + token,
+				"Content-Type":  "application/json",
+			},
+			Body: reqBodyStr,
+		}, nil, err, token)
+	}
+
 	logging.APIRequest(method, path, statusCode, duration, err)
 
 	return resp, err
 }
 
+// logAPIError logs API errors with request/response details
+func (c *Client) logAPIError(context, method, path string, statusCode int, responseBody string, err error) {
+	c.tokenMu.RLock()
+	token := c.accessToken
+	c.tokenMu.RUnlock()
+
+	logging.LogHTTPError(context, &logging.HTTPRequestInfo{
+		Method: method,
+		URL:    c.baseURL + path,
+		Headers: map[string]string{
+			"Authorization": "Bearer " + token,
+			"Content-Type":  "application/json",
+		},
+	}, &logging.HTTPResponseInfo{
+		StatusCode: statusCode,
+		Body:       responseBody,
+	}, err, token)
+}
+
 // GetEnvironmentInfo retrieves environment information
 func (c *Client) GetEnvironmentInfo(ctx context.Context) (*EnvironmentInfo, error) {
-	resp, err := c.doRequest(ctx, "GET", "/platform/management/v1/environment", nil)
+	path := "/platform/management/v1/environment"
+	resp, err := c.doRequest(ctx, "GET", path, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
+	body, _ := io.ReadAll(resp.Body)
+
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API request failed with status %d: %s", resp.StatusCode, string(body))
+		err := fmt.Errorf("API request failed with status %d", resp.StatusCode)
+		c.logAPIError("get_environment_info", "GET", path, resp.StatusCode, string(body), err)
+		return nil, fmt.Errorf("API request failed with status %d: %s", resp.StatusCode, logging.SanitizePII(string(body)))
 	}
 
 	var info EnvironmentInfo
-	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+	if err := json.Unmarshal(body, &info); err != nil {
+		c.logAPIError("get_environment_info_decode", "GET", path, resp.StatusCode, string(body), err)
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
@@ -282,6 +333,7 @@ func (c *Client) ExecuteDQL(ctx context.Context, query string, maxRecords, maxBy
 	}
 	c.budgetMu.Unlock()
 
+	path := "/platform/storage/query/v1/query:execute"
 	reqBody := DQLQueryRequest{
 		Query:            query,
 		MaxResultRecords: maxRecords,
@@ -289,7 +341,7 @@ func (c *Client) ExecuteDQL(ctx context.Context, query string, maxRecords, maxBy
 		RequestTimeoutMs: 60000,
 	}
 
-	resp, err := c.doRequest(ctx, "POST", "/platform/storage/query/v1/query:execute", reqBody)
+	resp, err := c.doRequest(ctx, "POST", path, reqBody)
 	if err != nil {
 		return nil, err
 	}
@@ -297,15 +349,19 @@ func (c *Client) ExecuteDQL(ctx context.Context, query string, maxRecords, maxBy
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
+		c.logAPIError("execute_dql_read", "POST", path, 0, "", fmt.Errorf("failed to read response: %w", err))
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("DQL query failed with status %d: %s", resp.StatusCode, string(body))
+		err := fmt.Errorf("DQL query failed with status %d", resp.StatusCode)
+		c.logAPIError("execute_dql", "POST", path, resp.StatusCode, string(body), err)
+		return nil, fmt.Errorf("DQL query failed with status %d: %s", resp.StatusCode, logging.SanitizePII(string(body)))
 	}
 
 	var queryResp DQLQueryResponse
 	if err := json.Unmarshal(body, &queryResp); err != nil {
+		c.logAPIError("execute_dql_decode", "POST", path, resp.StatusCode, string(body), err)
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
@@ -329,10 +385,11 @@ func (c *Client) ExecuteDQL(ctx context.Context, query string, maxRecords, maxBy
 }
 
 func (c *Client) pollDQLResult(ctx context.Context, token string) (*DQLQueryResponse, error) {
+	path := "/platform/storage/query/v1/query:poll?request-token=" + url.QueryEscape(token)
 	for i := 0; i < 60; i++ { // Max 60 attempts (60 seconds)
 		time.Sleep(time.Second)
 
-		resp, err := c.doRequest(ctx, "GET", "/platform/storage/query/v1/query:poll?request-token="+url.QueryEscape(token), nil)
+		resp, err := c.doRequest(ctx, "GET", path, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -340,11 +397,19 @@ func (c *Client) pollDQLResult(ctx context.Context, token string) (*DQLQueryResp
 		body, err := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		if err != nil {
+			c.logAPIError("poll_dql_read", "GET", path, 0, "", fmt.Errorf("failed to read poll response: %w", err))
 			return nil, fmt.Errorf("failed to read poll response: %w", err)
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			err := fmt.Errorf("DQL poll failed with status %d", resp.StatusCode)
+			c.logAPIError("poll_dql", "GET", path, resp.StatusCode, string(body), err)
+			return nil, fmt.Errorf("DQL poll failed with status %d: %s", resp.StatusCode, logging.SanitizePII(string(body)))
 		}
 
 		var queryResp DQLQueryResponse
 		if err := json.Unmarshal(body, &queryResp); err != nil {
+			c.logAPIError("poll_dql_decode", "GET", path, resp.StatusCode, string(body), err)
 			return nil, fmt.Errorf("failed to decode poll response: %w", err)
 		}
 
@@ -364,9 +429,10 @@ func (c *Client) pollDQLResult(ctx context.Context, token string) (*DQLQueryResp
 
 // VerifyDQL verifies a DQL statement
 func (c *Client) VerifyDQL(ctx context.Context, query string) (*DQLVerifyResponse, error) {
+	path := "/platform/storage/query/v1/query:verify"
 	reqBody := DQLVerifyRequest{Query: query}
 
-	resp, err := c.doRequest(ctx, "POST", "/platform/storage/query/v1/query:verify", reqBody)
+	resp, err := c.doRequest(ctx, "POST", path, reqBody)
 	if err != nil {
 		return nil, err
 	}
@@ -374,11 +440,19 @@ func (c *Client) VerifyDQL(ctx context.Context, query string) (*DQLVerifyRespons
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
+		c.logAPIError("verify_dql_read", "POST", path, 0, "", fmt.Errorf("failed to read response: %w", err))
 		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		err := fmt.Errorf("DQL verify failed with status %d", resp.StatusCode)
+		c.logAPIError("verify_dql", "POST", path, resp.StatusCode, string(body), err)
+		return nil, fmt.Errorf("DQL verify failed with status %d: %s", resp.StatusCode, logging.SanitizePII(string(body)))
 	}
 
 	var verifyResp DQLVerifyResponse
 	if err := json.Unmarshal(body, &verifyResp); err != nil {
+		c.logAPIError("verify_dql_decode", "POST", path, resp.StatusCode, string(body), err)
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
@@ -387,6 +461,7 @@ func (c *Client) VerifyDQL(ctx context.Context, query string) (*DQLVerifyRespons
 
 // ChatWithDavisCopilot sends a message to Davis CoPilot
 func (c *Client) ChatWithDavisCopilot(ctx context.Context, text string, contexts []DavisCopilotContext) (*DavisCopilotResponse, error) {
+	path := "/platform/davis/v1/copilot/conversation"
 	reqBody := map[string]interface{}{
 		"text": text,
 	}
@@ -394,7 +469,7 @@ func (c *Client) ChatWithDavisCopilot(ctx context.Context, text string, contexts
 		reqBody["context"] = contexts
 	}
 
-	resp, err := c.doRequest(ctx, "POST", "/platform/davis/v1/copilot/conversation", reqBody)
+	resp, err := c.doRequest(ctx, "POST", path, reqBody)
 	if err != nil {
 		return nil, err
 	}
@@ -402,15 +477,19 @@ func (c *Client) ChatWithDavisCopilot(ctx context.Context, text string, contexts
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
+		c.logAPIError("davis_copilot_read", "POST", path, 0, "", fmt.Errorf("failed to read response: %w", err))
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Davis CoPilot request failed with status %d: %s", resp.StatusCode, string(body))
+		err := fmt.Errorf("Davis CoPilot request failed with status %d", resp.StatusCode)
+		c.logAPIError("davis_copilot", "POST", path, resp.StatusCode, string(body), err)
+		return nil, fmt.Errorf("Davis CoPilot request failed with status %d: %s", resp.StatusCode, logging.SanitizePII(string(body)))
 	}
 
 	var copilotResp DavisCopilotResponse
 	if err := json.Unmarshal(body, &copilotResp); err != nil {
+		c.logAPIError("davis_copilot_decode", "POST", path, resp.StatusCode, string(body), err)
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
@@ -419,9 +498,10 @@ func (c *Client) ChatWithDavisCopilot(ctx context.Context, text string, contexts
 
 // GenerateDQLFromNL converts natural language to DQL
 func (c *Client) GenerateDQLFromNL(ctx context.Context, text string) (*NL2DQLResponse, error) {
+	path := "/platform/davis/v1/copilot/nl2dql"
 	reqBody := NL2DQLRequest{Text: text}
 
-	resp, err := c.doRequest(ctx, "POST", "/platform/davis/v1/copilot/nl2dql", reqBody)
+	resp, err := c.doRequest(ctx, "POST", path, reqBody)
 	if err != nil {
 		return nil, err
 	}
@@ -429,15 +509,19 @@ func (c *Client) GenerateDQLFromNL(ctx context.Context, text string) (*NL2DQLRes
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
+		c.logAPIError("nl2dql_read", "POST", path, 0, "", fmt.Errorf("failed to read response: %w", err))
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("NL2DQL request failed with status %d: %s", resp.StatusCode, string(body))
+		err := fmt.Errorf("NL2DQL request failed with status %d", resp.StatusCode)
+		c.logAPIError("nl2dql", "POST", path, resp.StatusCode, string(body), err)
+		return nil, fmt.Errorf("NL2DQL request failed with status %d: %s", resp.StatusCode, logging.SanitizePII(string(body)))
 	}
 
 	var nl2dqlResp NL2DQLResponse
 	if err := json.Unmarshal(body, &nl2dqlResp); err != nil {
+		c.logAPIError("nl2dql_decode", "POST", path, resp.StatusCode, string(body), err)
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
@@ -446,9 +530,10 @@ func (c *Client) GenerateDQLFromNL(ctx context.Context, text string) (*NL2DQLRes
 
 // ExplainDQLInNL explains DQL in natural language
 func (c *Client) ExplainDQLInNL(ctx context.Context, dql string) (*DQL2NLResponse, error) {
+	path := "/platform/davis/v1/copilot/dql2nl"
 	reqBody := DQL2NLRequest{DQL: dql}
 
-	resp, err := c.doRequest(ctx, "POST", "/platform/davis/v1/copilot/dql2nl", reqBody)
+	resp, err := c.doRequest(ctx, "POST", path, reqBody)
 	if err != nil {
 		return nil, err
 	}
@@ -456,15 +541,19 @@ func (c *Client) ExplainDQLInNL(ctx context.Context, dql string) (*DQL2NLRespons
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
+		c.logAPIError("dql2nl_read", "POST", path, 0, "", fmt.Errorf("failed to read response: %w", err))
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("DQL2NL request failed with status %d: %s", resp.StatusCode, string(body))
+		err := fmt.Errorf("DQL2NL request failed with status %d", resp.StatusCode)
+		c.logAPIError("dql2nl", "POST", path, resp.StatusCode, string(body), err)
+		return nil, fmt.Errorf("DQL2NL request failed with status %d: %s", resp.StatusCode, logging.SanitizePII(string(body)))
 	}
 
 	var dql2nlResp DQL2NLResponse
 	if err := json.Unmarshal(body, &dql2nlResp); err != nil {
+		c.logAPIError("dql2nl_decode", "POST", path, resp.StatusCode, string(body), err)
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
@@ -473,7 +562,8 @@ func (c *Client) ExplainDQLInNL(ctx context.Context, dql string) (*DQL2NLRespons
 
 // ListDavisAnalyzers lists available Davis Analyzers
 func (c *Client) ListDavisAnalyzers(ctx context.Context) ([]DavisAnalyzer, error) {
-	resp, err := c.doRequest(ctx, "GET", "/platform/davis/v1/analyzers", nil)
+	path := "/platform/davis/v1/analyzers"
+	resp, err := c.doRequest(ctx, "GET", path, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -481,17 +571,21 @@ func (c *Client) ListDavisAnalyzers(ctx context.Context) ([]DavisAnalyzer, error
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
+		c.logAPIError("list_analyzers_read", "GET", path, 0, "", fmt.Errorf("failed to read response: %w", err))
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("list analyzers request failed with status %d: %s", resp.StatusCode, string(body))
+		err := fmt.Errorf("list analyzers request failed with status %d", resp.StatusCode)
+		c.logAPIError("list_analyzers", "GET", path, resp.StatusCode, string(body), err)
+		return nil, fmt.Errorf("list analyzers request failed with status %d: %s", resp.StatusCode, logging.SanitizePII(string(body)))
 	}
 
 	var response struct {
 		Analyzers []DavisAnalyzer `json:"analyzers"`
 	}
 	if err := json.Unmarshal(body, &response); err != nil {
+		c.logAPIError("list_analyzers_decode", "GET", path, resp.StatusCode, string(body), err)
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
@@ -511,15 +605,19 @@ func (c *Client) ExecuteDavisAnalyzer(ctx context.Context, analyzerName string, 
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
+		c.logAPIError("execute_analyzer_read", "POST", path, 0, "", fmt.Errorf("failed to read response: %w", err))
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("execute analyzer request failed with status %d: %s", resp.StatusCode, string(body))
+		err := fmt.Errorf("execute analyzer request failed with status %d", resp.StatusCode)
+		c.logAPIError("execute_analyzer", "POST", path, resp.StatusCode, string(body), err)
+		return nil, fmt.Errorf("execute analyzer request failed with status %d: %s", resp.StatusCode, logging.SanitizePII(string(body)))
 	}
 
 	var result DavisAnalyzerResult
 	if err := json.Unmarshal(body, &result); err != nil {
+		c.logAPIError("execute_analyzer_decode", "POST", path, resp.StatusCode, string(body), err)
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
@@ -528,7 +626,8 @@ func (c *Client) ExecuteDavisAnalyzer(ctx context.Context, analyzerName string, 
 
 // CreateWorkflow creates a new workflow
 func (c *Client) CreateWorkflow(ctx context.Context, workflow *WorkflowCreateRequest) (*Workflow, error) {
-	resp, err := c.doRequest(ctx, "POST", "/platform/automation/v1/workflows", workflow)
+	path := "/platform/automation/v1/workflows"
+	resp, err := c.doRequest(ctx, "POST", path, workflow)
 	if err != nil {
 		return nil, err
 	}
@@ -536,15 +635,19 @@ func (c *Client) CreateWorkflow(ctx context.Context, workflow *WorkflowCreateReq
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
+		c.logAPIError("create_workflow_read", "POST", path, 0, "", fmt.Errorf("failed to read response: %w", err))
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("create workflow request failed with status %d: %s", resp.StatusCode, string(body))
+		err := fmt.Errorf("create workflow request failed with status %d", resp.StatusCode)
+		c.logAPIError("create_workflow", "POST", path, resp.StatusCode, string(body), err)
+		return nil, fmt.Errorf("create workflow request failed with status %d: %s", resp.StatusCode, logging.SanitizePII(string(body)))
 	}
 
 	var result Workflow
 	if err := json.Unmarshal(body, &result); err != nil {
+		c.logAPIError("create_workflow_decode", "POST", path, resp.StatusCode, string(body), err)
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
@@ -562,15 +665,19 @@ func (c *Client) UpdateWorkflow(ctx context.Context, workflowID string, updates 
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
+		c.logAPIError("update_workflow_read", "PATCH", path, 0, "", fmt.Errorf("failed to read response: %w", err))
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("update workflow request failed with status %d: %s", resp.StatusCode, string(body))
+		err := fmt.Errorf("update workflow request failed with status %d", resp.StatusCode)
+		c.logAPIError("update_workflow", "PATCH", path, resp.StatusCode, string(body), err)
+		return nil, fmt.Errorf("update workflow request failed with status %d: %s", resp.StatusCode, logging.SanitizePII(string(body)))
 	}
 
 	var result Workflow
 	if err := json.Unmarshal(body, &result); err != nil {
+		c.logAPIError("update_workflow_decode", "PATCH", path, resp.StatusCode, string(body), err)
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
@@ -579,7 +686,8 @@ func (c *Client) UpdateWorkflow(ctx context.Context, workflowID string, updates 
 
 // SendEmail sends an email
 func (c *Client) SendEmail(ctx context.Context, email *EmailRequest) (*EmailResponse, error) {
-	resp, err := c.doRequest(ctx, "POST", "/platform/notification/v1/email", email)
+	path := "/platform/notification/v1/email"
+	resp, err := c.doRequest(ctx, "POST", path, email)
 	if err != nil {
 		return nil, err
 	}
@@ -587,15 +695,19 @@ func (c *Client) SendEmail(ctx context.Context, email *EmailRequest) (*EmailResp
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
+		c.logAPIError("send_email_read", "POST", path, 0, "", fmt.Errorf("failed to read response: %w", err))
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
-		return nil, fmt.Errorf("send email request failed with status %d: %s", resp.StatusCode, string(body))
+		err := fmt.Errorf("send email request failed with status %d", resp.StatusCode)
+		c.logAPIError("send_email", "POST", path, resp.StatusCode, string(body), err)
+		return nil, fmt.Errorf("send email request failed with status %d: %s", resp.StatusCode, logging.SanitizePII(string(body)))
 	}
 
 	var result EmailResponse
 	if err := json.Unmarshal(body, &result); err != nil {
+		c.logAPIError("send_email_decode", "POST", path, resp.StatusCode, string(body), err)
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
@@ -604,13 +716,14 @@ func (c *Client) SendEmail(ctx context.Context, email *EmailRequest) (*EmailResp
 
 // SendSlackMessage sends a Slack message
 func (c *Client) SendSlackMessage(ctx context.Context, connectionID, channel, message string) (map[string]interface{}, error) {
+	path := "/platform/app-engine/slack-connector/send-message"
 	reqBody := map[string]interface{}{
 		"connectionId": connectionID,
 		"channel":      channel,
 		"message":      message,
 	}
 
-	resp, err := c.doRequest(ctx, "POST", "/platform/app-engine/slack-connector/send-message", reqBody)
+	resp, err := c.doRequest(ctx, "POST", path, reqBody)
 	if err != nil {
 		return nil, err
 	}
@@ -618,15 +731,19 @@ func (c *Client) SendSlackMessage(ctx context.Context, connectionID, channel, me
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
+		c.logAPIError("send_slack_read", "POST", path, 0, "", fmt.Errorf("failed to read response: %w", err))
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("send Slack message request failed with status %d: %s", resp.StatusCode, string(body))
+		err := fmt.Errorf("send Slack message request failed with status %d", resp.StatusCode)
+		c.logAPIError("send_slack", "POST", path, resp.StatusCode, string(body), err)
+		return nil, fmt.Errorf("send Slack message request failed with status %d: %s", resp.StatusCode, logging.SanitizePII(string(body)))
 	}
 
 	var result map[string]interface{}
 	if err := json.Unmarshal(body, &result); err != nil {
+		c.logAPIError("send_slack_decode", "POST", path, resp.StatusCode, string(body), err)
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
