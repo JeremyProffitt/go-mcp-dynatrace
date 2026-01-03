@@ -88,6 +88,50 @@ Add to your Claude Desktop configuration (`claude_desktop_config.json`):
 }
 ```
 
+## Usage with Continue.dev
+
+### JSON Configuration
+
+Add to your Continue configuration (`config.json`):
+
+```json
+{
+  "experimental": {
+    "modelContextProtocolServers": [
+      {
+        "transport": {
+          "type": "stdio",
+          "command": "/path/to/go-mcp-dynatrace",
+          "args": [],
+          "env": {
+            "DT_ENVIRONMENT": "https://abc12345.apps.dynatrace.com",
+            "OAUTH_CLIENT_ID": "dt0s02.XXXXXXXX",
+            "OAUTH_CLIENT_SECRET": "dt0s02.XXXXXXXX.XXXXXXXXXXXXXXXX"
+          }
+        }
+      }
+    ]
+  }
+}
+```
+
+### YAML Configuration
+
+Add to your Continue configuration (`config.yaml`):
+
+```yaml
+experimental:
+  modelContextProtocolServers:
+    - transport:
+        type: stdio
+        command: /path/to/go-mcp-dynatrace
+        args: []
+        env:
+          DT_ENVIRONMENT: https://abc12345.apps.dynatrace.com
+          OAUTH_CLIENT_ID: dt0s02.XXXXXXXX
+          OAUTH_CLIENT_SECRET: dt0s02.XXXXXXXX.XXXXXXXXXXXXXXXX
+```
+
 ## Available Tools
 
 ### Data Query & Retrieval
