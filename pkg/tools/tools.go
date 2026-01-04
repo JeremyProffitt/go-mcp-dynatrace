@@ -55,6 +55,14 @@ func (r *Registry) RegisterAll(server *mcp.Server) {
 	r.registerSendSlackMessage(server)
 	r.registerResetGrailBudget(server)
 
+	// Bucket discovery tools
+	r.registerListBuckets(server)
+	r.registerDescribeBucket(server)
+
+	// Tag discovery tools
+	r.registerListTags(server)
+	r.registerFindEntitiesByTag(server)
+
 	// Davis Copilot tools - conditionally registered
 	if r.davisCopilotEnabled {
 		r.registerGenerateDQLFromNL(server)
@@ -1418,6 +1426,565 @@ Budget status after reset:
 - Budget exceeded: No
 
 You can now execute new Grail queries again.`, state.BudgetLimitGB, state.BudgetLimitGB)
+
+		return textResult(resp), nil
+	})
+}
+
+func (r *Registry) registerListBuckets(server *mcp.Server) {
+	server.RegisterTool(mcp.Tool{
+		Name:        "list_buckets",
+		Description: "List all available Grail data buckets with their metadata including retention, record counts, and size estimates. Use this to discover what data sources are available before querying.",
+		InputSchema: mcp.JSONSchema{
+			Type: "object",
+			Properties: map[string]mcp.Property{
+				"includeSystem": {
+					Type:        "boolean",
+					Description: "Include system buckets (dt.system.*) in the results. Default: false",
+					Default:     false,
+				},
+			},
+		},
+		Annotations: &mcp.ToolAnnotation{
+			Title:        "List Buckets",
+			ReadOnlyHint: true,
+		},
+	}, func(args map[string]interface{}) (*mcp.CallToolResult, error) {
+		logging.ToolCall("list_buckets", args, 0, false)
+
+		includeSystem := getBool(args, "includeSystem", false)
+
+		query := `fetch dt.system.buckets
+| fields bucket, estimatedBytes, retentionDays, recordCount, status
+| sort bucket asc`
+
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+
+		result, err := r.client.ExecuteDQL(ctx, query, 500, 1024*1024)
+		if err != nil {
+			return errorResult(fmt.Sprintf("Failed to list buckets: %s", err.Error())), nil
+		}
+
+		r.logger.SaveDQLQueryToFile(query, "list_buckets")
+
+		if result.Result == nil || len(result.Result.Records) == 0 {
+			return textResult("No buckets found."), nil
+		}
+
+		resp := "# Available Grail Buckets\n\n"
+
+		userBuckets := make([]map[string]interface{}, 0)
+		systemBuckets := make([]map[string]interface{}, 0)
+
+		for _, record := range result.Result.Records {
+			bucket, _ := record["bucket"].(string)
+			if strings.HasPrefix(bucket, "dt.system.") {
+				systemBuckets = append(systemBuckets, record)
+			} else {
+				userBuckets = append(userBuckets, record)
+			}
+		}
+
+		formatBucket := func(record map[string]interface{}) string {
+			bucket, _ := record["bucket"].(string)
+			estimatedBytes, _ := record["estimatedBytes"].(float64)
+			retentionDays, _ := record["retentionDays"].(float64)
+			recordCount, _ := record["recordCount"].(float64)
+			status, _ := record["status"].(string)
+
+			sizeGB := estimatedBytes / (1024 * 1024 * 1024)
+			return fmt.Sprintf("- **%s**\n  Records: %.0f | Size: %.2f GB | Retention: %.0f days | Status: %s\n",
+				bucket, recordCount, sizeGB, retentionDays, status)
+		}
+
+		resp += fmt.Sprintf("## Data Buckets (%d)\n\n", len(userBuckets))
+		for _, record := range userBuckets {
+			resp += formatBucket(record)
+		}
+
+		if includeSystem && len(systemBuckets) > 0 {
+			resp += fmt.Sprintf("\n## System Buckets (%d)\n\n", len(systemBuckets))
+			for _, record := range systemBuckets {
+				resp += formatBucket(record)
+			}
+		}
+
+		resp += `
+## Common Bucket Types
+
+| Bucket | Purpose |
+|--------|---------|
+| logs | Application and infrastructure logs |
+| events | System and custom events |
+| spans | Distributed traces |
+| metrics | Time series metrics |
+| dt.davis.problems | Davis AI detected problems |
+| dt.entity.* | Entity metadata |
+| security.events | Security findings |
+
+## Next Steps
+1. Use **describe_bucket** to see the schema of a specific bucket
+2. Use **execute_dql** to query data: ` + "`fetch <bucket_name>`"
+
+		return textResult(resp), nil
+	})
+}
+
+func (r *Registry) registerDescribeBucket(server *mcp.Server) {
+	server.RegisterTool(mcp.Tool{
+		Name:        "describe_bucket",
+		Description: "Get detailed schema information for a specific Grail bucket, including field names, types, and sample values. Essential for understanding what data is available before writing queries.",
+		InputSchema: mcp.JSONSchema{
+			Type: "object",
+			Properties: map[string]mcp.Property{
+				"bucket": {
+					Type:        "string",
+					Description: "Name of the bucket to describe (e.g., 'logs', 'events', 'spans', 'dt.davis.problems')",
+				},
+				"sampleSize": {
+					Type:        "number",
+					Description: "Number of sample records to analyze for field discovery. Default: 100",
+					Default:     100,
+				},
+			},
+			Required: []string{"bucket"},
+		},
+		Annotations: &mcp.ToolAnnotation{
+			Title:        "Describe Bucket",
+			ReadOnlyHint: true,
+		},
+	}, func(args map[string]interface{}) (*mcp.CallToolResult, error) {
+		logging.ToolCall("describe_bucket", args, 0, false)
+
+		bucket := getString(args, "bucket", "")
+		sampleSize := getInt(args, "sampleSize", 100)
+
+		if bucket == "" {
+			return errorResult("bucket is required"), nil
+		}
+
+		// Get sample data to discover fields
+		query := fmt.Sprintf(`fetch %s, from: now()-1h
+| limit %d`, bucket, sampleSize)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+
+		result, err := r.client.ExecuteDQL(ctx, query, sampleSize, 2*1024*1024)
+		if err != nil {
+			return errorResult(fmt.Sprintf("Failed to describe bucket '%s': %s", bucket, err.Error())), nil
+		}
+
+		r.logger.SaveDQLQueryToFile(query, "describe_bucket_"+bucket)
+
+		if result.Result == nil || len(result.Result.Records) == 0 {
+			return textResult(fmt.Sprintf("No data found in bucket '%s' in the last hour. The bucket may be empty or not exist.", bucket)), nil
+		}
+
+		// Analyze fields from sample data
+		fieldInfo := make(map[string]map[string]interface{})
+
+		for _, record := range result.Result.Records {
+			for field, value := range record {
+				if _, exists := fieldInfo[field]; !exists {
+					fieldInfo[field] = map[string]interface{}{
+						"type":         inferType(value),
+						"sampleValues": make([]interface{}, 0),
+						"nullCount":    0,
+						"totalCount":   0,
+					}
+				}
+
+				info := fieldInfo[field]
+				info["totalCount"] = info["totalCount"].(int) + 1
+
+				if value == nil {
+					info["nullCount"] = info["nullCount"].(int) + 1
+				} else {
+					samples := info["sampleValues"].([]interface{})
+					if len(samples) < 3 {
+						info["sampleValues"] = append(samples, value)
+					}
+				}
+			}
+		}
+
+		resp := fmt.Sprintf("# Bucket Schema: %s\n\n", bucket)
+		resp += fmt.Sprintf("Analyzed %d sample records from the last hour.\n\n", len(result.Result.Records))
+		resp += "## Fields\n\n"
+		resp += "| Field | Type | Sample Values |\n"
+		resp += "|-------|------|---------------|\n"
+
+		// Sort fields for consistent output
+		fields := make([]string, 0, len(fieldInfo))
+		for field := range fieldInfo {
+			fields = append(fields, field)
+		}
+
+		// Common fields first, then alphabetical
+		commonFields := []string{"timestamp", "content", "loglevel", "dt.entity.host", "dt.entity.service", "event.type", "event.name"}
+		orderedFields := make([]string, 0)
+
+		for _, cf := range commonFields {
+			for _, f := range fields {
+				if f == cf {
+					orderedFields = append(orderedFields, f)
+					break
+				}
+			}
+		}
+
+		for _, f := range fields {
+			found := false
+			for _, of := range orderedFields {
+				if f == of {
+					found = true
+					break
+				}
+			}
+			if !found {
+				orderedFields = append(orderedFields, f)
+			}
+		}
+
+		for _, field := range orderedFields {
+			info := fieldInfo[field]
+			samples := info["sampleValues"].([]interface{})
+			sampleStr := ""
+			for i, s := range samples {
+				if i > 0 {
+					sampleStr += ", "
+				}
+				str := fmt.Sprintf("%v", s)
+				if len(str) > 40 {
+					str = str[:37] + "..."
+				}
+				sampleStr += "`" + str + "`"
+			}
+			resp += fmt.Sprintf("| %s | %s | %s |\n", field, info["type"], sampleStr)
+		}
+
+		resp += fmt.Sprintf(`
+## Query Examples
+
+### Basic query
+`+"```"+`
+fetch %s
+| limit 10
+`+"```"+`
+
+### Filter by time
+`+"```"+`
+fetch %s, from: now()-24h, to: now()
+| limit 100
+`+"```"+`
+
+### Common filters
+`+"```"+`
+fetch %s
+| filter <field> == "<value>"
+| sort timestamp desc
+| limit 50
+`+"```"+`
+`, bucket, bucket, bucket)
+
+		return textResult(resp), nil
+	})
+}
+
+func inferType(value interface{}) string {
+	if value == nil {
+		return "null"
+	}
+	switch value.(type) {
+	case string:
+		return "string"
+	case float64:
+		return "number"
+	case bool:
+		return "boolean"
+	case []interface{}:
+		return "array"
+	case map[string]interface{}:
+		return "object"
+	default:
+		return fmt.Sprintf("%T", value)
+	}
+}
+
+func (r *Registry) registerListTags(server *mcp.Server) {
+	server.RegisterTool(mcp.Tool{
+		Name:        "list_tags",
+		Description: "List all tags used across monitored entities in the Dynatrace environment. Tags help categorize and filter entities. Returns tag keys and their usage counts.",
+		InputSchema: mcp.JSONSchema{
+			Type: "object",
+			Properties: map[string]mcp.Property{
+				"entityType": {
+					Type:        "string",
+					Description: "Optional: Filter tags by entity type (e.g., 'host', 'service', 'process_group', 'application'). If not specified, returns tags from all entity types.",
+				},
+				"tagKeyFilter": {
+					Type:        "string",
+					Description: "Optional: Filter tag keys containing this substring (case-insensitive).",
+				},
+			},
+		},
+		Annotations: &mcp.ToolAnnotation{
+			Title:        "List Tags",
+			ReadOnlyHint: true,
+		},
+	}, func(args map[string]interface{}) (*mcp.CallToolResult, error) {
+		logging.ToolCall("list_tags", args, 0, false)
+
+		entityType := getString(args, "entityType", "")
+		tagKeyFilter := getString(args, "tagKeyFilter", "")
+
+		// Build query based on entity type
+		var query string
+		if entityType != "" {
+			query = fmt.Sprintf(`smartscapeNodes "%s"
+| filter isNotNull(tags)
+| expand tag = tags
+| summarize count = count(), by: {tag}
+| sort count desc
+| limit 200`, entityType)
+		} else {
+			query = `smartscapeNodes "*"
+| filter isNotNull(tags)
+| expand tag = tags
+| summarize count = count(), by: {tag}
+| sort count desc
+| limit 200`
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+
+		result, err := r.client.ExecuteDQL(ctx, query, 200, 2*1024*1024)
+		if err != nil {
+			return errorResult(fmt.Sprintf("Failed to list tags: %s", err.Error())), nil
+		}
+
+		r.logger.SaveDQLQueryToFile(query, "list_tags")
+
+		if result.Result == nil || len(result.Result.Records) == 0 {
+			return textResult("No tags found in the environment."), nil
+		}
+
+		// Group tags by key
+		tagGroups := make(map[string][]struct {
+			Value string
+			Count float64
+		})
+
+		for _, record := range result.Result.Records {
+			tag, _ := record["tag"].(string)
+			count, _ := record["count"].(float64)
+
+			// Parse tag format: "key:value" or just "key"
+			parts := strings.SplitN(tag, ":", 2)
+			key := parts[0]
+			value := ""
+			if len(parts) > 1 {
+				value = parts[1]
+			}
+
+			// Apply filter if specified
+			if tagKeyFilter != "" && !strings.Contains(strings.ToLower(key), strings.ToLower(tagKeyFilter)) {
+				continue
+			}
+
+			if _, exists := tagGroups[key]; !exists {
+				tagGroups[key] = make([]struct {
+					Value string
+					Count float64
+				}, 0)
+			}
+			tagGroups[key] = append(tagGroups[key], struct {
+				Value string
+				Count float64
+			}{value, count})
+		}
+
+		resp := "# Tags in Environment\n\n"
+		if entityType != "" {
+			resp += fmt.Sprintf("Filtered by entity type: **%s**\n\n", entityType)
+		}
+		if tagKeyFilter != "" {
+			resp += fmt.Sprintf("Filtered by tag key containing: **%s**\n\n", tagKeyFilter)
+		}
+
+		resp += fmt.Sprintf("Found **%d** unique tag keys.\n\n", len(tagGroups))
+
+		for key, values := range tagGroups {
+			totalCount := 0.0
+			for _, v := range values {
+				totalCount += v.Count
+			}
+
+			resp += fmt.Sprintf("## %s (%.0f entities)\n", key, totalCount)
+
+			if len(values) <= 10 {
+				for _, v := range values {
+					if v.Value != "" {
+						resp += fmt.Sprintf("- `%s:%s` (%.0f)\n", key, v.Value, v.Count)
+					} else {
+						resp += fmt.Sprintf("- `%s` (%.0f)\n", key, v.Count)
+					}
+				}
+			} else {
+				resp += fmt.Sprintf("- %d unique values (showing top 5):\n", len(values))
+				for i, v := range values {
+					if i >= 5 {
+						break
+					}
+					if v.Value != "" {
+						resp += fmt.Sprintf("  - `%s:%s` (%.0f)\n", key, v.Value, v.Count)
+					}
+				}
+			}
+			resp += "\n"
+		}
+
+		resp += `## Using Tags in DQL
+
+### Filter entities by tag
+` + "```" + `
+smartscapeNodes "service"
+| filter contains(toString(tags), "environment:production")
+` + "```" + `
+
+### Find entities with specific tag key
+` + "```" + `
+smartscapeNodes "*"
+| expand tag = tags
+| filter startsWith(tag, "owner:")
+| fields name, type, tag
+` + "```" + `
+
+## Next Steps
+- Use **find_entities_by_tag** to find entities with specific tags
+- Use **find_entity_by_name** to search by entity name
+`
+
+		return textResult(resp), nil
+	})
+}
+
+func (r *Registry) registerFindEntitiesByTag(server *mcp.Server) {
+	server.RegisterTool(mcp.Tool{
+		Name:        "find_entities_by_tag",
+		Description: "Find all monitored entities that have a specific tag or tag pattern. Useful for discovering resources by their classification.",
+		InputSchema: mcp.JSONSchema{
+			Type: "object",
+			Properties: map[string]mcp.Property{
+				"tag": {
+					Type:        "string",
+					Description: "Tag to search for. Can be 'key:value' for exact match or just 'key' for all entities with that tag key.",
+				},
+				"entityType": {
+					Type:        "string",
+					Description: "Optional: Filter by entity type (e.g., 'host', 'service', 'process_group', 'application').",
+				},
+				"maxResults": {
+					Type:        "number",
+					Description: "Maximum number of entities to return. Default: 50",
+					Default:     50,
+				},
+			},
+			Required: []string{"tag"},
+		},
+		Annotations: &mcp.ToolAnnotation{
+			Title:        "Find Entities by Tag",
+			ReadOnlyHint: true,
+		},
+	}, func(args map[string]interface{}) (*mcp.CallToolResult, error) {
+		logging.ToolCall("find_entities_by_tag", args, 0, false)
+
+		tag := getString(args, "tag", "")
+		entityType := getString(args, "entityType", "")
+		maxResults := getInt(args, "maxResults", 50)
+
+		if tag == "" {
+			return errorResult("tag is required"), nil
+		}
+
+		// Determine if this is a key:value search or key-only
+		var tagFilter string
+		if strings.Contains(tag, ":") {
+			// Exact tag match
+			tagFilter = fmt.Sprintf(`contains(toString(tags), "%s")`, tag)
+		} else {
+			// Key-only match (any value)
+			tagFilter = fmt.Sprintf(`contains(toString(tags), "%s:")`, tag)
+		}
+
+		// Build query
+		nodeType := "*"
+		if entityType != "" {
+			nodeType = entityType
+		}
+
+		query := fmt.Sprintf(`smartscapeNodes "%s"
+| filter %s
+| fields id, type, name, tags
+| limit %d`, nodeType, tagFilter, maxResults)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+
+		result, err := r.client.ExecuteDQL(ctx, query, maxResults, 2*1024*1024)
+		if err != nil {
+			return errorResult(fmt.Sprintf("Failed to find entities by tag: %s", err.Error())), nil
+		}
+
+		r.logger.SaveDQLQueryToFile(query, "find_entities_by_tag")
+
+		if result.Result == nil || len(result.Result.Records) == 0 {
+			return textResult(fmt.Sprintf("No entities found with tag '%s'.", tag)), nil
+		}
+
+		resp := fmt.Sprintf("# Entities with Tag: %s\n\n", tag)
+		resp += fmt.Sprintf("Found **%d** entities.\n\n", len(result.Result.Records))
+
+		// Group by entity type
+		byType := make(map[string][]map[string]interface{})
+		for _, record := range result.Result.Records {
+			eType, _ := record["type"].(string)
+			if _, exists := byType[eType]; !exists {
+				byType[eType] = make([]map[string]interface{}, 0)
+			}
+			byType[eType] = append(byType[eType], record)
+		}
+
+		for eType, entities := range byType {
+			resp += fmt.Sprintf("## %s (%d)\n\n", eType, len(entities))
+			for _, entity := range entities {
+				name, _ := entity["name"].(string)
+				id, _ := entity["id"].(string)
+				tags := entity["tags"]
+
+				resp += fmt.Sprintf("- **%s**\n", name)
+				resp += fmt.Sprintf("  - ID: `%s`\n", id)
+
+				if tags != nil {
+					tagsJSON, _ := json.Marshal(tags)
+					tagsStr := string(tagsJSON)
+					if len(tagsStr) > 100 {
+						tagsStr = tagsStr[:97] + "..."
+					}
+					resp += fmt.Sprintf("  - Tags: %s\n", tagsStr)
+				}
+				resp += "\n"
+			}
+		}
+
+		resp += `## Next Steps
+- Use **execute_dql** with the entity ID to get detailed metrics
+- Use **list_problems** filtered by entity to check for issues
+- Use **entity-deep-dive** prompt for comprehensive analysis
+`
 
 		return textResult(resp), nil
 	})

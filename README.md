@@ -256,7 +256,7 @@ Options:
 | `DT_PLATFORM_TOKEN` | ** | Platform authentication token |
 | `DT_SSO_URL` | No | SSO URL (default: sso.dynatrace.com) |
 | `DT_GRAIL_QUERY_BUDGET_GB` | No | Grail query budget in GB (default: 1000) |
-| `DT_LOG_DQL_QUERIES` | No | Log DQL queries to files (default: false) |
+| `DT_LOG_QUERIES` | No | Log DQL queries to files (default: false) |
 | `SLACK_CONNECTION_ID` | No | Slack connector ID |
 | `MCP_LOG_DIR` | No | Log directory |
 | `MCP_LOG_LEVEL` | No | Log level |
@@ -323,7 +323,7 @@ Log levels:
 Enable DQL query file logging for debugging and auditing by setting:
 
 ```bash
-export DT_LOG_DQL_QUERIES=true
+export DT_LOG_QUERIES=true
 ```
 
 When enabled, all DQL queries are saved to individual files:

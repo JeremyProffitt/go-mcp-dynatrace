@@ -48,6 +48,8 @@ func (r *Registry) registerPrompt(prompt mcp.Prompt, handler PromptHandler) {
 func (r *Registry) registerAll() {
 	r.registerEntityDeepDive()
 	r.registerDailySummary()
+	r.registerExploreBucket()
+	r.registerExploreTags()
 }
 
 func (r *Registry) registerEntityDeepDive() {
@@ -277,6 +279,265 @@ Please structure your final report as:
 
 		return &mcp.GetPromptResult{
 			Description: fmt.Sprintf("Daily operations summary for the last %s", timeframe),
+			Messages: []mcp.PromptMessage{
+				{
+					Role: "user",
+					Content: mcp.PromptContent{
+						Type: "text",
+						Text: promptText,
+					},
+				},
+			},
+		}, nil
+	})
+}
+
+func (r *Registry) registerExploreBucket() {
+	r.registerPrompt(mcp.Prompt{
+		Name:        "explore-bucket",
+		Description: "Explore and analyze data in a specific Grail bucket. Discovers schema, shows sample data, and suggests useful queries.",
+		Arguments: []mcp.PromptArgument{
+			{
+				Name:        "bucket",
+				Description: "Name of the bucket to explore (e.g., 'logs', 'events', 'spans', 'dt.davis.problems')",
+				Required:    true,
+			},
+			{
+				Name:        "timeframe",
+				Description: "Timeframe for analysis (e.g., '1h', '24h', '7d'). Default: 1h",
+				Required:    false,
+			},
+		},
+	}, func(args map[string]interface{}) (*mcp.GetPromptResult, error) {
+		bucket := getString(args, "bucket", "")
+		if bucket == "" {
+			return nil, fmt.Errorf("bucket is required")
+		}
+
+		timeframe := getString(args, "timeframe", "1h")
+
+		promptText := fmt.Sprintf(`# Bucket Exploration: %s
+
+Perform a comprehensive exploration of the Grail bucket "%s" over the last %s.
+
+## Step 1: Discover Available Buckets
+First, verify the bucket exists and check what other buckets are available:
+
+Use the **list_buckets** tool to see all available buckets with their metadata.
+
+## Step 2: Describe Bucket Schema
+Get detailed schema information for this bucket:
+
+Use the **describe_bucket** tool with:
+- bucket: "%s"
+- sampleSize: 100
+
+This will show you:
+- All available fields
+- Field types
+- Sample values
+
+## Step 3: Analyze Data Patterns
+Run exploratory queries to understand the data:
+
+### Record count and time distribution
+`+"```"+`
+fetch %s, from: now()-%s
+| summarize count = count(), by: {bin(timestamp, 1h)}
+| sort timestamp desc
+`+"```"+`
+
+### Top values for key fields
+`+"```"+`
+fetch %s, from: now()-%s
+| summarize count = count(), by: {<key_field>}
+| sort count desc
+| limit 20
+`+"```"+`
+
+### Recent records
+`+"```"+`
+fetch %s, from: now()-%s
+| sort timestamp desc
+| limit 10
+`+"```"+`
+
+## Step 4: Identify Useful Filters
+Based on the schema, suggest common filter patterns:
+- Time-based filters (timestamp)
+- Entity filters (dt.entity.*, dt.smartscape.*)
+- Status/level filters (loglevel, event.status, etc.)
+- Content search (contains, matches)
+
+## Step 5: Create Query Templates
+Based on your analysis, provide:
+1. A basic query template for this bucket
+2. A filtered query template with common use cases
+3. An aggregation query for trends/summaries
+
+## Summary
+After exploration, summarize:
+- Total record count in the timeframe
+- Key fields and their purposes
+- Recommended queries for common use cases
+- Any interesting patterns or anomalies found
+`, bucket, bucket, timeframe, bucket, bucket, timeframe, bucket, timeframe, bucket, timeframe)
+
+		return &mcp.GetPromptResult{
+			Description: fmt.Sprintf("Exploration of bucket: %s", bucket),
+			Messages: []mcp.PromptMessage{
+				{
+					Role: "user",
+					Content: mcp.PromptContent{
+						Type: "text",
+						Text: promptText,
+					},
+				},
+			},
+		}, nil
+	})
+}
+
+func (r *Registry) registerExploreTags() {
+	r.registerPrompt(mcp.Prompt{
+		Name:        "explore-tags",
+		Description: "Explore and analyze tags across your Dynatrace environment. Discover tag usage patterns, find untagged resources, and suggest tagging improvements.",
+		Arguments: []mcp.PromptArgument{
+			{
+				Name:        "focus",
+				Description: "Optional focus area: 'all', 'services', 'hosts', 'applications'. Default: all",
+				Required:    false,
+			},
+			{
+				Name:        "tag_key",
+				Description: "Optional: Focus on a specific tag key (e.g., 'environment', 'owner', 'team')",
+				Required:    false,
+			},
+		},
+	}, func(args map[string]interface{}) (*mcp.GetPromptResult, error) {
+		focus := getString(args, "focus", "all")
+		tagKey := getString(args, "tag_key", "")
+
+		promptText := `# Tag Exploration and Analysis
+
+Perform a comprehensive analysis of tags in the Dynatrace environment.
+
+## Step 1: Discover All Tags
+`
+		if tagKey != "" {
+			promptText += fmt.Sprintf(`
+Focus on tag key: **%s**
+
+Use the **list_tags** tool with:
+- tagKeyFilter: "%s"
+`, tagKey, tagKey)
+		} else {
+			promptText += `
+Use the **list_tags** tool to see all tags in the environment.
+`
+		}
+
+		if focus != "all" {
+			promptText += fmt.Sprintf(`
+Filter by entity type: **%s**
+`, focus)
+		}
+
+		promptText += `
+## Step 2: Analyze Tag Distribution
+
+### Tag coverage by entity type
+`+"```"+`
+smartscapeNodes "*"
+| summarize
+    total = count(),
+    tagged = countIf(isNotNull(tags)),
+    untagged = countIf(isNull(tags)),
+    by: {type}
+| fieldsAdd coverage = 100.0 * tagged / total
+| sort total desc
+`+"```"+`
+
+### Most common tag keys
+`+"```"+`
+smartscapeNodes "*"
+| filter isNotNull(tags)
+| expand tag = tags
+| parse tag, "LD:key ':'"
+| summarize count = count(), by: {key}
+| sort count desc
+| limit 20
+`+"```"+`
+
+## Step 3: Find Untagged Resources
+Identify entities that may need tagging:
+
+`+"```"+`
+smartscapeNodes "*"
+| filter isNull(tags) OR arraySize(tags) == 0
+| fields type, name, id
+| summarize count = count(), by: {type}
+| sort count desc
+`+"```"+`
+
+## Step 4: Tag Value Analysis
+`
+
+		if tagKey != "" {
+			promptText += fmt.Sprintf(`
+Analyze values for tag key "%s":
+
+Use the **find_entities_by_tag** tool with:
+- tag: "%s"
+- maxResults: 100
+`, tagKey, tagKey)
+		} else {
+			promptText += `
+For each important tag key, analyze:
+- Number of unique values
+- Value distribution
+- Entities per value
+
+Common important tags to analyze:
+- environment (prod, staging, dev)
+- owner / team
+- application
+- cost-center
+- criticality
+`
+		}
+
+		promptText += `
+## Step 5: Tagging Recommendations
+
+Based on your analysis, provide recommendations for:
+
+### Missing Tags
+- Which critical entities lack important tags?
+- What standard tags should be applied?
+
+### Tag Standardization
+- Are there inconsistent tag values (e.g., "prod" vs "production")?
+- Are there typos or variations that should be consolidated?
+
+### Suggested Tag Schema
+Recommend a tagging schema based on observed patterns:
+| Tag Key | Purpose | Example Values |
+|---------|---------|----------------|
+| environment | Deployment stage | prod, staging, dev |
+| owner | Responsible team | platform, frontend |
+| ... | ... | ... |
+
+## Summary
+Provide:
+1. Tag coverage statistics (% of entities tagged)
+2. Most important tag keys
+3. Top issues found (untagged resources, inconsistencies)
+4. Prioritized remediation recommendations
+`
+
+		return &mcp.GetPromptResult{
+			Description: "Tag exploration and analysis",
 			Messages: []mcp.PromptMessage{
 				{
 					Role: "user",

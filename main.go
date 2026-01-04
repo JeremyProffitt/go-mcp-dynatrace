@@ -26,7 +26,7 @@ const (
 const (
 	EnvLogDir              = "MCP_LOG_DIR"
 	EnvLogLevel            = "MCP_LOG_LEVEL"
-	EnvLogDQLQueries       = "DT_LOG_DQL_QUERIES"
+	EnvLogQueries          = "DT_LOG_QUERIES"
 	EnvDTEnvironment       = "DT_ENVIRONMENT"
 	EnvDTPlatformToken     = "DT_PLATFORM_TOKEN"
 	EnvOAuthClientID       = "OAUTH_CLIENT_ID"
@@ -94,7 +94,7 @@ func main() {
 
 	// Resolve DQL query logging (off by default)
 	logDQLQueries := false
-	if envVal := os.Getenv(EnvLogDQLQueries); envVal != "" {
+	if envVal := os.Getenv(EnvLogQueries); envVal != "" {
 		logDQLQueries = envVal == "true" || envVal == "1" || envVal == "yes"
 	}
 
@@ -297,7 +297,7 @@ ENVIRONMENT VARIABLES (Authentication - one method required):
 
 ENVIRONMENT VARIABLES (Optional):
     DT_GRAIL_QUERY_BUDGET_GB   Grail query budget in GB (default: 1000)
-    DT_LOG_DQL_QUERIES         Log DQL queries to files (default: false)
+    DT_LOG_QUERIES             Log DQL queries to files (default: false)
                                When enabled, queries are saved to:
                                {log_dir}/DQL/YYYYMMDD/{name}.YYYYMMDD.HHmmss.dql
     DT_ENABLE_DAVIS_COPILOT    Enable Davis Copilot AI tools (default: false)
@@ -343,6 +343,14 @@ AVAILABLE TOOLS:
     send_slack_message              Send Slack message
     reset_grail_budget              Reset Grail query budget
 
+  Bucket Discovery Tools:
+    list_buckets                    List all Grail data buckets
+    describe_bucket                 Get schema for a specific bucket
+
+  Tag Discovery Tools:
+    list_tags                       List all tags in the environment
+    find_entities_by_tag            Find entities with a specific tag
+
   Davis Copilot Tools (requires DT_ENABLE_DAVIS_COPILOT=true):
     generate_dql_from_natural_language   Convert natural language to DQL
     explain_dql_in_natural_language      Explain DQL in natural language
@@ -353,6 +361,8 @@ AVAILABLE TOOLS:
 AVAILABLE PROMPTS:
     entity-deep-dive                Deep analysis of a monitored entity
     daily-summary                   Daily operations summary report
+    explore-bucket                  Explore and analyze a Grail bucket
+    explore-tags                    Analyze tags across the environment
 
 `, AppName, AppName, AppName, AppName, AppName, AppName)
 }
