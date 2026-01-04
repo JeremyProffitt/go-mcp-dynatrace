@@ -786,6 +786,32 @@ func (l *Logger) LogHTTPResponse(context string, resp *HTTPResponseInfo, duratio
 	l.Debug(sb.String())
 }
 
+// LogHTTPResponseBody logs the HTTP response body at DEBUG level with PII filtering.
+// This is useful when the response body is read separately from the initial response handling.
+func (l *Logger) LogHTTPResponseBody(context string, resp *HTTPResponseInfo, secrets ...string) {
+	if l == nil || LevelDebug > l.level {
+		return
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("HTTP_RESPONSE_BODY context=%q", context))
+
+	if resp != nil {
+		sb.WriteString(fmt.Sprintf(" status=%d", resp.StatusCode))
+		if resp.Body != "" {
+			sanitizedBody := SanitizeAndMaskSecrets(resp.Body, secrets...)
+			bodyLen := len(resp.Body)
+			// Truncate long bodies
+			if len(sanitizedBody) > 1000 {
+				sanitizedBody = sanitizedBody[:1000] + "...[truncated]"
+			}
+			sb.WriteString(fmt.Sprintf(" body_length=%d body=%q", bodyLen, sanitizedBody))
+		}
+	}
+
+	l.Debug(sb.String())
+}
+
 // Global convenience functions for HTTP error logging
 
 func LogHTTPError(context string, req *HTTPRequestInfo, resp *HTTPResponseInfo, err error, secrets ...string) {
@@ -805,6 +831,13 @@ func LogHTTPRequest(context string, req *HTTPRequestInfo, secrets ...string) {
 func LogHTTPResponse(context string, resp *HTTPResponseInfo, duration time.Duration, secrets ...string) {
 	if defaultLogger != nil {
 		defaultLogger.LogHTTPResponse(context, resp, duration, secrets...)
+	}
+}
+
+// LogHTTPResponseBody is the global convenience function for HTTP response body logging
+func LogHTTPResponseBody(context string, resp *HTTPResponseInfo, secrets ...string) {
+	if defaultLogger != nil {
+		defaultLogger.LogHTTPResponseBody(context, resp, secrets...)
 	}
 }
 

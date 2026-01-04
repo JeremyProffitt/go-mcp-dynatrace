@@ -367,6 +367,30 @@ func (c *Client) logAPIError(context, method, path string, statusCode int, respo
 	}, err, token)
 }
 
+// logResponseBody logs the response body at DEBUG level with redaction.
+// This should be called after reading the response body to log its contents.
+func (c *Client) logResponseBody(context string, statusCode int, body []byte) {
+	c.tokenMu.RLock()
+	token := c.accessToken
+	c.tokenMu.RUnlock()
+
+	logging.LogHTTPResponseBody(context, &logging.HTTPResponseInfo{
+		StatusCode: statusCode,
+		Body:       string(body),
+	}, token)
+}
+
+// readAndLogBody reads the response body, logs it at DEBUG level, and returns the bytes.
+// It returns the body bytes and any error from reading.
+func (c *Client) readAndLogBody(resp *http.Response, context string) ([]byte, error) {
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	c.logResponseBody(context, resp.StatusCode, body)
+	return body, nil
+}
+
 // GetEnvironmentInfo retrieves environment information
 func (c *Client) GetEnvironmentInfo(ctx context.Context) (*EnvironmentInfo, error) {
 	path := "/platform/management/v1/environment"
@@ -376,7 +400,11 @@ func (c *Client) GetEnvironmentInfo(ctx context.Context) (*EnvironmentInfo, erro
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, err := c.readAndLogBody(resp, "get_environment_info")
+	if err != nil {
+		c.logAPIError("get_environment_info_read", "GET", path, 0, "", fmt.Errorf("failed to read response: %w", err))
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		err := fmt.Errorf("API request failed with status %d", resp.StatusCode)
@@ -417,7 +445,7 @@ func (c *Client) ExecuteDQL(ctx context.Context, query string, maxRecords, maxBy
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := c.readAndLogBody(resp, "execute_dql")
 	if err != nil {
 		c.logAPIError("execute_dql_read", "POST", path, 0, "", fmt.Errorf("failed to read response: %w", err))
 		return nil, fmt.Errorf("failed to read response: %w", err)
@@ -464,7 +492,7 @@ func (c *Client) pollDQLResult(ctx context.Context, token string) (*DQLQueryResp
 			return nil, err
 		}
 
-		body, err := io.ReadAll(resp.Body)
+		body, err := c.readAndLogBody(resp, "poll_dql")
 		resp.Body.Close()
 		if err != nil {
 			c.logAPIError("poll_dql_read", "GET", path, 0, "", fmt.Errorf("failed to read poll response: %w", err))
@@ -508,7 +536,7 @@ func (c *Client) VerifyDQL(ctx context.Context, query string) (*DQLVerifyRespons
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := c.readAndLogBody(resp, "verify_dql")
 	if err != nil {
 		c.logAPIError("verify_dql_read", "POST", path, 0, "", fmt.Errorf("failed to read response: %w", err))
 		return nil, fmt.Errorf("failed to read response: %w", err)
@@ -545,7 +573,7 @@ func (c *Client) ChatWithDavisCopilot(ctx context.Context, text string, contexts
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := c.readAndLogBody(resp, "davis_copilot")
 	if err != nil {
 		c.logAPIError("davis_copilot_read", "POST", path, 0, "", fmt.Errorf("failed to read response: %w", err))
 		return nil, fmt.Errorf("failed to read response: %w", err)
@@ -577,7 +605,7 @@ func (c *Client) GenerateDQLFromNL(ctx context.Context, text string) (*NL2DQLRes
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := c.readAndLogBody(resp, "nl2dql")
 	if err != nil {
 		c.logAPIError("nl2dql_read", "POST", path, 0, "", fmt.Errorf("failed to read response: %w", err))
 		return nil, fmt.Errorf("failed to read response: %w", err)
@@ -609,7 +637,7 @@ func (c *Client) ExplainDQLInNL(ctx context.Context, dql string) (*DQL2NLRespons
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := c.readAndLogBody(resp, "dql2nl")
 	if err != nil {
 		c.logAPIError("dql2nl_read", "POST", path, 0, "", fmt.Errorf("failed to read response: %w", err))
 		return nil, fmt.Errorf("failed to read response: %w", err)
@@ -639,7 +667,7 @@ func (c *Client) ListDavisAnalyzers(ctx context.Context) ([]DavisAnalyzer, error
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := c.readAndLogBody(resp, "list_analyzers")
 	if err != nil {
 		c.logAPIError("list_analyzers_read", "GET", path, 0, "", fmt.Errorf("failed to read response: %w", err))
 		return nil, fmt.Errorf("failed to read response: %w", err)
@@ -673,7 +701,7 @@ func (c *Client) ExecuteDavisAnalyzer(ctx context.Context, analyzerName string, 
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := c.readAndLogBody(resp, "execute_analyzer")
 	if err != nil {
 		c.logAPIError("execute_analyzer_read", "POST", path, 0, "", fmt.Errorf("failed to read response: %w", err))
 		return nil, fmt.Errorf("failed to read response: %w", err)
@@ -703,7 +731,7 @@ func (c *Client) CreateWorkflow(ctx context.Context, workflow *WorkflowCreateReq
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := c.readAndLogBody(resp, "create_workflow")
 	if err != nil {
 		c.logAPIError("create_workflow_read", "POST", path, 0, "", fmt.Errorf("failed to read response: %w", err))
 		return nil, fmt.Errorf("failed to read response: %w", err)
@@ -733,7 +761,7 @@ func (c *Client) UpdateWorkflow(ctx context.Context, workflowID string, updates 
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := c.readAndLogBody(resp, "update_workflow")
 	if err != nil {
 		c.logAPIError("update_workflow_read", "PATCH", path, 0, "", fmt.Errorf("failed to read response: %w", err))
 		return nil, fmt.Errorf("failed to read response: %w", err)
@@ -763,7 +791,7 @@ func (c *Client) SendEmail(ctx context.Context, email *EmailRequest) (*EmailResp
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := c.readAndLogBody(resp, "send_email")
 	if err != nil {
 		c.logAPIError("send_email_read", "POST", path, 0, "", fmt.Errorf("failed to read response: %w", err))
 		return nil, fmt.Errorf("failed to read response: %w", err)
@@ -799,7 +827,7 @@ func (c *Client) SendSlackMessage(ctx context.Context, connectionID, channel, me
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := c.readAndLogBody(resp, "send_slack")
 	if err != nil {
 		c.logAPIError("send_slack_read", "POST", path, 0, "", fmt.Errorf("failed to read response: %w", err))
 		return nil, fmt.Errorf("failed to read response: %w", err)
