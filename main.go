@@ -66,15 +66,19 @@ func main() {
 	// Resolve log directory
 	var resolvedLogDir string
 	var logDirSource logging.ConfigSource
+	var addAppSubfolder bool
 	if *logDir != "" {
 		resolvedLogDir = *logDir
 		logDirSource = logging.SourceFlag
+		addAppSubfolder = true // User specified a shared log directory
 	} else if envVal := os.Getenv(EnvLogDir); envVal != "" {
 		resolvedLogDir = envVal
 		logDirSource = logging.SourceEnvironment
+		addAppSubfolder = true // User specified a shared log directory
 	} else {
 		resolvedLogDir = logging.DefaultLogDir(AppName)
 		logDirSource = logging.SourceDefault
+		addAppSubfolder = false // Default already includes app name
 	}
 
 	// Resolve log level
@@ -100,10 +104,11 @@ func main() {
 
 	// Initialize logger
 	logger, err := logging.NewLogger(logging.Config{
-		LogDir:        resolvedLogDir,
-		AppName:       AppName,
-		Level:         parsedLogLevel,
-		LogDQLQueries: logDQLQueries,
+		LogDir:          resolvedLogDir,
+		AppName:         AppName,
+		Level:           parsedLogLevel,
+		LogDQLQueries:   logDQLQueries,
+		AddAppSubfolder: addAppSubfolder,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to initialize logger: %v\n", err)

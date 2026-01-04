@@ -85,10 +85,11 @@ type Logger struct {
 }
 
 type Config struct {
-	LogDir        string
-	AppName       string
-	Level         LogLevel
-	LogDQLQueries bool
+	LogDir          string
+	AppName         string
+	Level           LogLevel
+	LogDQLQueries   bool
+	AddAppSubfolder bool // When true, add AppName as a subfolder to LogDir (for shared MCP_LOG_DIR)
 }
 
 var (
@@ -215,6 +216,12 @@ func NewLogger(cfg Config) (*Logger, error) {
 	logDir := ExpandPath(cfg.LogDir)
 	if logDir == "" {
 		logDir = DefaultLogDir(cfg.AppName)
+	}
+
+	// If AddAppSubfolder is true, add the app name as a subfolder
+	// This is used when MCP_LOG_DIR is set to a shared location
+	if cfg.AddAppSubfolder {
+		logDir = filepath.Join(logDir, cfg.AppName)
 	}
 
 	if err := os.MkdirAll(logDir, 0755); err != nil {

@@ -308,6 +308,14 @@ This works in the `~/.mcp_env` file, environment variables, and command-line fla
 
 Logs are written to `~/go-mcp-dynatrace/logs/` by default, with daily rotation.
 
+When `MCP_LOG_DIR` is set or `-log-dir` flag is used, logs are automatically placed in a subfolder named after the binary (`go-mcp-dynatrace`). This allows multiple MCP servers to share the same log directory:
+
+```
+MCP_LOG_DIR=/var/log/mcp
+  └── go-mcp-dynatrace/
+      └── go-mcp-dynatrace-2026-01-04.log
+```
+
 Log levels:
 - `off` - Disable logging
 - `error` - Errors only
