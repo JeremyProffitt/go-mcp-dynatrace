@@ -14,12 +14,23 @@ import (
 // ToolHandler is a function that handles a tool call
 type ToolHandler func(arguments map[string]interface{}) (*CallToolResult, error)
 
+// PromptHandler is a function that handles a prompt request
+type PromptHandler func(arguments map[string]interface{}) (*GetPromptResult, error)
+
 // ResourceProvider is an interface for providing MCP resources
 type ResourceProvider interface {
 	// ListResources returns the available resources
 	ListResources() []Resource
 	// ReadResource reads a resource by URI, returns content and mimeType
 	ReadResource(uri string) (content string, mimeType string, err error)
+}
+
+// PromptProvider is an interface for providing MCP prompts
+type PromptProvider interface {
+	// ListPrompts returns the available prompts
+	ListPrompts() []Prompt
+	// GetPrompt returns a prompt result for the given name and arguments
+	GetPrompt(name string, arguments map[string]interface{}) (*GetPromptResult, error)
 }
 
 // Server represents an MCP server
@@ -35,6 +46,9 @@ type Server struct {
 
 	// Resources
 	resourceProviders []ResourceProvider
+
+	// Prompts
+	promptProviders []PromptProvider
 
 	// Rate limiting
 	toolCallTimestamps []time.Time
@@ -53,6 +67,7 @@ func NewServer(name, version string) *Server {
 		tools:              make([]Tool, 0),
 		handlers:           make(map[string]ToolHandler),
 		resourceProviders:  make([]ResourceProvider, 0),
+		promptProviders:    make([]PromptProvider, 0),
 		stdin:              os.Stdin,
 		stdout:             os.Stdout,
 		stderr:             os.Stderr,
@@ -83,6 +98,13 @@ func (s *Server) RegisterResourceProvider(provider ResourceProvider) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.resourceProviders = append(s.resourceProviders, provider)
+}
+
+// RegisterPromptProvider registers a prompt provider
+func (s *Server) RegisterPromptProvider(provider PromptProvider) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.promptProviders = append(s.promptProviders, provider)
 }
 
 // checkRateLimit returns true if the request should be rate limited
@@ -277,6 +299,18 @@ func (s *Server) handleRequest(request *JSONRPCRequest) *JSONRPCResponse {
 		} else {
 			response.Result = result
 		}
+	case "resources/templates/list", "prompts/list":
+		response.Result = s.handleListPrompts()
+	case "prompts/get":
+		result, err := s.handleGetPrompt(request.Params)
+		if err != nil {
+			response.Error = &JSONRPCError{
+				Code:    InvalidParams,
+				Message: err.Error(),
+			}
+		} else {
+			response.Result = result
+		}
 	case "ping":
 		response.Result = map[string]interface{}{}
 	default:
@@ -296,14 +330,22 @@ func (s *Server) handleInitialize(params interface{}) *InitializeResult {
 		},
 	}
 
-	// Add resources capability if we have any resource providers
 	s.mu.RLock()
 	hasResources := len(s.resourceProviders) > 0
+	hasPrompts := len(s.promptProviders) > 0
 	s.mu.RUnlock()
 
+	// Add resources capability if we have any resource providers
 	if hasResources {
 		capabilities.Resources = &ResourcesCapability{
 			Subscribe:   false,
+			ListChanged: false,
+		}
+	}
+
+	// Add prompts capability if we have any prompt providers
+	if hasPrompts {
+		capabilities.Prompts = &PromptsCapability{
 			ListChanged: false,
 		}
 	}
@@ -372,6 +414,48 @@ func (s *Server) handleReadResource(params interface{}) (*ReadResourceResult, er
 	}
 
 	return nil, fmt.Errorf("resource not found: %s", uri)
+}
+
+func (s *Server) handleListPrompts() *ListPromptsResult {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	prompts := make([]Prompt, 0)
+	for _, provider := range s.promptProviders {
+		prompts = append(prompts, provider.ListPrompts()...)
+	}
+
+	return &ListPromptsResult{
+		Prompts: prompts,
+	}
+}
+
+func (s *Server) handleGetPrompt(params interface{}) (*GetPromptResult, error) {
+	paramsMap, ok := params.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("invalid params type")
+	}
+
+	name, ok := paramsMap["name"].(string)
+	if !ok {
+		return nil, fmt.Errorf("missing prompt name")
+	}
+
+	arguments, _ := paramsMap["arguments"].(map[string]interface{})
+
+	s.mu.RLock()
+	providers := s.promptProviders
+	s.mu.RUnlock()
+
+	// Try each provider until we find one that can handle the prompt
+	for _, provider := range providers {
+		result, err := provider.GetPrompt(name, arguments)
+		if err == nil {
+			return result, nil
+		}
+	}
+
+	return nil, fmt.Errorf("prompt not found: %s", name)
 }
 
 func (s *Server) handleCallTool(params interface{}) (*CallToolResult, error) {

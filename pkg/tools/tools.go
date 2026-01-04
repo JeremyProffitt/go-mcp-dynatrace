@@ -12,35 +12,41 @@ import (
 	"github.com/dynatrace-oss/go-mcp-dynatrace/pkg/mcp"
 )
 
+// Config holds configuration options for the tool registry
+type Config struct {
+	Client              *dynatrace.Client
+	Logger              *logging.Logger
+	SlackConnID         string
+	DavisCopilotEnabled bool
+}
+
 // Registry holds all tool registrations
 type Registry struct {
-	client      *dynatrace.Client
-	logger      *logging.Logger
-	slackConnID string
+	client              *dynatrace.Client
+	logger              *logging.Logger
+	slackConnID         string
+	davisCopilotEnabled bool
 }
 
 // NewRegistry creates a new tool registry
-func NewRegistry(client *dynatrace.Client, logger *logging.Logger, slackConnID string) *Registry {
+func NewRegistry(cfg Config) *Registry {
 	return &Registry{
-		client:      client,
-		logger:      logger,
-		slackConnID: slackConnID,
+		client:              cfg.Client,
+		logger:              cfg.Logger,
+		slackConnID:         cfg.SlackConnID,
+		davisCopilotEnabled: cfg.DavisCopilotEnabled,
 	}
 }
 
 // RegisterAll registers all tools with the MCP server
 func (r *Registry) RegisterAll(server *mcp.Server) {
+	// Core tools - always registered
 	r.registerGetEnvironmentInfo(server)
 	r.registerListProblems(server)
 	r.registerListVulnerabilities(server)
 	r.registerFindEntityByName(server)
 	r.registerExecuteDQL(server)
 	r.registerVerifyDQL(server)
-	r.registerGenerateDQLFromNL(server)
-	r.registerExplainDQLInNL(server)
-	r.registerChatWithDavisCopilot(server)
-	r.registerListDavisAnalyzers(server)
-	r.registerExecuteDavisAnalyzer(server)
 	r.registerGetKubernetesEvents(server)
 	r.registerListExceptions(server)
 	r.registerCreateWorkflowForNotification(server)
@@ -48,6 +54,18 @@ func (r *Registry) RegisterAll(server *mcp.Server) {
 	r.registerSendEmail(server)
 	r.registerSendSlackMessage(server)
 	r.registerResetGrailBudget(server)
+
+	// Davis Copilot tools - conditionally registered
+	if r.davisCopilotEnabled {
+		r.registerGenerateDQLFromNL(server)
+		r.registerExplainDQLInNL(server)
+		r.registerChatWithDavisCopilot(server)
+		r.registerListDavisAnalyzers(server)
+		r.registerExecuteDavisAnalyzer(server)
+		logging.Info("Davis Copilot tools enabled")
+	} else {
+		logging.Info("Davis Copilot tools disabled (set DT_ENABLE_DAVIS_COPILOT=true to enable)")
+	}
 }
 
 // Helper functions

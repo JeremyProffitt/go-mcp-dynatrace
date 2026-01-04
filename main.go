@@ -13,6 +13,7 @@ import (
 	"github.com/dynatrace-oss/go-mcp-dynatrace/pkg/dynatrace"
 	"github.com/dynatrace-oss/go-mcp-dynatrace/pkg/logging"
 	"github.com/dynatrace-oss/go-mcp-dynatrace/pkg/mcp"
+	"github.com/dynatrace-oss/go-mcp-dynatrace/pkg/prompts"
 	"github.com/dynatrace-oss/go-mcp-dynatrace/pkg/tools"
 )
 
@@ -23,17 +24,18 @@ const (
 
 // Environment variable names
 const (
-	EnvLogDir            = "MCP_LOG_DIR"
-	EnvLogLevel          = "MCP_LOG_LEVEL"
-	EnvLogDQLQueries     = "DT_LOG_DQL_QUERIES"
-	EnvDTEnvironment     = "DT_ENVIRONMENT"
-	EnvDTPlatformToken   = "DT_PLATFORM_TOKEN"
-	EnvOAuthClientID     = "OAUTH_CLIENT_ID"
-	EnvOAuthClientSecret = "OAUTH_CLIENT_SECRET"
-	EnvDTSSOURL          = "DT_SSO_URL"
-	EnvDTAccountURN      = "DT_ACCOUNT_URN"
-	EnvGrailBudgetGB     = "DT_GRAIL_QUERY_BUDGET_GB"
-	EnvSlackConnID       = "SLACK_CONNECTION_ID"
+	EnvLogDir              = "MCP_LOG_DIR"
+	EnvLogLevel            = "MCP_LOG_LEVEL"
+	EnvLogDQLQueries       = "DT_LOG_DQL_QUERIES"
+	EnvDTEnvironment       = "DT_ENVIRONMENT"
+	EnvDTPlatformToken     = "DT_PLATFORM_TOKEN"
+	EnvOAuthClientID       = "OAUTH_CLIENT_ID"
+	EnvOAuthClientSecret   = "OAUTH_CLIENT_SECRET"
+	EnvDTSSOURL            = "DT_SSO_URL"
+	EnvDTAccountURN        = "DT_ACCOUNT_URN"
+	EnvGrailBudgetGB       = "DT_GRAIL_QUERY_BUDGET_GB"
+	EnvSlackConnID         = "SLACK_CONNECTION_ID"
+	EnvEnableDavisCopilot  = "DT_ENABLE_DAVIS_COPILOT"
 )
 
 func main() {
@@ -123,6 +125,12 @@ func main() {
 	accountURN := os.Getenv(EnvDTAccountURN)
 	slackConnID := os.Getenv(EnvSlackConnID)
 
+	// Davis Copilot is disabled by default
+	davisCopilotEnabled := false
+	if envVal := os.Getenv(EnvEnableDavisCopilot); envVal != "" {
+		davisCopilotEnabled = envVal == "true" || envVal == "1" || envVal == "yes"
+	}
+
 	grailBudgetGB := 1000 // Default
 	if envVal := os.Getenv(EnvGrailBudgetGB); envVal != "" {
 		fmt.Sscanf(envVal, "%d", &grailBudgetGB)
@@ -185,13 +193,22 @@ func main() {
 	})
 
 	// Register all tools
-	registry := tools.NewRegistry(dtClient, logger, slackConnID)
+	registry := tools.NewRegistry(tools.Config{
+		Client:              dtClient,
+		Logger:              logger,
+		SlackConnID:         slackConnID,
+		DavisCopilotEnabled: davisCopilotEnabled,
+	})
 	registry.RegisterAll(server)
 
 	// Register DQL reference as a resource
 	dqlProvider := dql.NewReferenceProvider()
 	dqlAdapter := dql.NewMCPResourceAdapter(dqlProvider)
 	server.RegisterResourceProvider(dqlAdapter)
+
+	// Register prompts
+	promptRegistry := prompts.NewRegistry()
+	server.RegisterPromptProvider(promptRegistry)
 
 	if dqlProvider.HasOverride() {
 		logger.Info("DQL reference: using custom override file")
@@ -283,6 +300,12 @@ ENVIRONMENT VARIABLES (Optional):
     DT_LOG_DQL_QUERIES         Log DQL queries to files (default: false)
                                When enabled, queries are saved to:
                                {log_dir}/DQL/YYYYMMDD/{name}.YYYYMMDD.HHmmss.dql
+    DT_ENABLE_DAVIS_COPILOT    Enable Davis Copilot AI tools (default: false)
+                               When enabled, adds tools for:
+                               - Natural language to DQL conversion
+                               - DQL explanation in natural language
+                               - Davis Copilot chat
+                               - Davis Analyzers
     SLACK_CONNECTION_ID        Slack connector ID for sending Slack messages
     MCP_LOG_DIR                Override default log directory
     MCP_LOG_LEVEL              Override default log level
@@ -312,11 +335,6 @@ AVAILABLE TOOLS:
     find_entity_by_name             Find monitored entities by name
     execute_dql                     Execute DQL queries
     verify_dql                      Verify DQL syntax
-    generate_dql_from_natural_language   Convert natural language to DQL
-    explain_dql_in_natural_language      Explain DQL in natural language
-    chat_with_davis_copilot         Chat with Davis CoPilot
-    list_davis_analyzers            List available Davis Analyzers
-    execute_davis_analyzer          Execute a Davis Analyzer
     get_kubernetes_events           Get Kubernetes events
     list_exceptions                 List application exceptions
     create_workflow_for_notification    Create notification workflow
@@ -324,6 +342,17 @@ AVAILABLE TOOLS:
     send_email                      Send email via Dynatrace
     send_slack_message              Send Slack message
     reset_grail_budget              Reset Grail query budget
+
+  Davis Copilot Tools (requires DT_ENABLE_DAVIS_COPILOT=true):
+    generate_dql_from_natural_language   Convert natural language to DQL
+    explain_dql_in_natural_language      Explain DQL in natural language
+    chat_with_davis_copilot         Chat with Davis CoPilot
+    list_davis_analyzers            List available Davis Analyzers
+    execute_davis_analyzer          Execute a Davis Analyzer
+
+AVAILABLE PROMPTS:
+    entity-deep-dive                Deep analysis of a monitored entity
+    daily-summary                   Daily operations summary report
 
 `, AppName, AppName, AppName, AppName, AppName, AppName)
 }
