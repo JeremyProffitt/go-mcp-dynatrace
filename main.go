@@ -96,11 +96,8 @@ func main() {
 	}
 	parsedLogLevel := logging.ParseLogLevel(resolvedLogLevel)
 
-	// Resolve DQL query logging (off by default)
-	logDQLQueries := false
-	if envVal := os.Getenv(EnvLogQueries); envVal != "" {
-		logDQLQueries = envVal == "true" || envVal == "1" || envVal == "yes"
-	}
+	// DQL query logging (off by default, set DT_LOG_QUERIES=1 to enable)
+	logDQLQueries := os.Getenv(EnvLogQueries) == "1"
 
 	// Initialize logger
 	logger, err := logging.NewLogger(logging.Config{
@@ -130,11 +127,8 @@ func main() {
 	accountURN := os.Getenv(EnvDTAccountURN)
 	slackConnID := os.Getenv(EnvSlackConnID)
 
-	// Davis Copilot is disabled by default
-	davisCopilotEnabled := false
-	if envVal := os.Getenv(EnvEnableDavisCopilot); envVal != "" {
-		davisCopilotEnabled = envVal == "true" || envVal == "1" || envVal == "yes"
-	}
+	// Davis Copilot (off by default, set DT_ENABLE_DAVIS_COPILOT=1 to enable)
+	davisCopilotEnabled := os.Getenv(EnvEnableDavisCopilot) == "1"
 
 	grailBudgetGB := 1000 // Default
 	if envVal := os.Getenv(EnvGrailBudgetGB); envVal != "" {
