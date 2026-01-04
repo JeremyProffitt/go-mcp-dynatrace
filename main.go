@@ -37,6 +37,10 @@ const (
 )
 
 func main() {
+	// Load environment variables from ~/.mcp_env if it exists
+	// This must happen before flag parsing so env vars are available for defaults
+	logging.LoadEnvFile()
+
 	// Parse command line flags
 	logDir := flag.String("log-dir", "", "Directory for log files (default: ~/go-mcp-dynatrace/logs)")
 	logLevel := flag.String("log-level", "info", "Log level: off, error, warn, info, access, debug")

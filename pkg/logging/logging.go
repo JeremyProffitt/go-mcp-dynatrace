@@ -1,6 +1,7 @@
 package logging
 
 import (
+	"bufio"
 	"fmt"
 	"io"
 	"log"
@@ -95,6 +96,101 @@ var (
 	once          sync.Once
 )
 
+// ExpandPath expands ~ to the user's home directory in file paths.
+// This is necessary because ~ is a shell feature and is not automatically
+// expanded when paths are passed via environment variables or config files.
+func ExpandPath(path string) string {
+	if path == "" {
+		return path
+	}
+	if path == "~" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return path
+		}
+		return home
+	}
+	if len(path) > 1 && path[0] == '~' && (path[1] == '/' || path[1] == '\\') {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return path
+		}
+		return filepath.Join(home, path[2:])
+	}
+	return path
+}
+
+// LoadEnvFile loads environment variables from ~/.mcp_env file.
+// The file format is simple KEY=VALUE pairs, one per line.
+// Lines starting with # are treated as comments.
+// Empty lines are ignored.
+// Existing environment variables are NOT overwritten.
+// Returns the number of variables loaded and any error encountered.
+func LoadEnvFile() (int, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return 0, nil // Silently skip if we can't get home dir
+	}
+
+	envFile := filepath.Join(homeDir, ".mcp_env")
+	file, err := os.Open(envFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil // File doesn't exist, that's fine
+		}
+		return 0, fmt.Errorf("failed to open %s: %w", envFile, err)
+	}
+	defer file.Close()
+
+	loaded := 0
+	scanner := bufio.NewScanner(file)
+	lineNum := 0
+
+	for scanner.Scan() {
+		lineNum++
+		line := strings.TrimSpace(scanner.Text())
+
+		// Skip empty lines and comments
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		// Parse KEY=VALUE
+		idx := strings.Index(line, "=")
+		if idx == -1 {
+			continue // Skip malformed lines
+		}
+
+		key := strings.TrimSpace(line[:idx])
+		value := strings.TrimSpace(line[idx+1:])
+
+		// Skip if key is empty
+		if key == "" {
+			continue
+		}
+
+		// Remove surrounding quotes from value if present
+		if len(value) >= 2 {
+			if (value[0] == '"' && value[len(value)-1] == '"') ||
+				(value[0] == '\'' && value[len(value)-1] == '\'') {
+				value = value[1 : len(value)-1]
+			}
+		}
+
+		// Only set if not already set in environment
+		if os.Getenv(key) == "" {
+			os.Setenv(key, value)
+			loaded++
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return loaded, fmt.Errorf("error reading %s: %w", envFile, err)
+	}
+
+	return loaded, nil
+}
+
 func DefaultLogDir(appName string) string {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -116,7 +212,7 @@ func NewLogger(cfg Config) (*Logger, error) {
 		cfg.AppName = "go-mcp-dynatrace"
 	}
 
-	logDir := cfg.LogDir
+	logDir := ExpandPath(cfg.LogDir)
 	if logDir == "" {
 		logDir = DefaultLogDir(cfg.AppName)
 	}
