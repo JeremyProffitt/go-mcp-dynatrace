@@ -299,7 +299,12 @@ func (s *Server) handleRequest(request *JSONRPCRequest) *JSONRPCResponse {
 		} else {
 			response.Result = result
 		}
-	case "resources/templates/list", "prompts/list":
+	case "resources/templates/list":
+		// Return empty list - this server uses static resources, not resource templates
+		response.Result = map[string]interface{}{
+			"resourceTemplates": []interface{}{},
+		}
+	case "prompts/list":
 		response.Result = s.handleListPrompts()
 	case "prompts/get":
 		result, err := s.handleGetPrompt(request.Params)
