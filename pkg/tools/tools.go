@@ -1455,8 +1455,8 @@ func (r *Registry) registerListBuckets(server *mcp.Server) {
 		includeSystem := getBool(args, "includeSystem", false)
 
 		query := `fetch dt.system.buckets
-| fields bucket, estimatedBytes, retentionDays, recordCount, status
-| sort bucket asc`
+| fields name, display_name, type, estimated_uncompressed_bytes, retention_days, record, metric_interval
+| sort name asc`
 
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
@@ -1478,8 +1478,8 @@ func (r *Registry) registerListBuckets(server *mcp.Server) {
 		systemBuckets := make([]map[string]interface{}, 0)
 
 		for _, record := range result.Result.Records {
-			bucket, _ := record["bucket"].(string)
-			if strings.HasPrefix(bucket, "dt.system.") {
+			name, _ := record["name"].(string)
+			if strings.HasPrefix(name, "dt.system.") {
 				systemBuckets = append(systemBuckets, record)
 			} else {
 				userBuckets = append(userBuckets, record)
@@ -1487,15 +1487,27 @@ func (r *Registry) registerListBuckets(server *mcp.Server) {
 		}
 
 		formatBucket := func(record map[string]interface{}) string {
-			bucket, _ := record["bucket"].(string)
-			estimatedBytes, _ := record["estimatedBytes"].(float64)
-			retentionDays, _ := record["retentionDays"].(float64)
-			recordCount, _ := record["recordCount"].(float64)
-			status, _ := record["status"].(string)
+			name, _ := record["name"].(string)
+			displayName, _ := record["display_name"].(string)
+			bucketType, _ := record["type"].(string)
+			sizeBytes, _ := record["estimated_uncompressed_bytes"].(float64)
+			retentionDays, _ := record["retention_days"].(float64)
+			recordCount, _ := record["record"].(float64)
+			metricInterval, _ := record["metric_interval"].(string)
 
-			sizeGB := estimatedBytes / (1024 * 1024 * 1024)
-			return fmt.Sprintf("- **%s**\n  Records: %.0f | Size: %.2f GB | Retention: %.0f days | Status: %s\n",
-				bucket, recordCount, sizeGB, retentionDays, status)
+			sizeGB := sizeBytes / (1024 * 1024 * 1024)
+
+			result := fmt.Sprintf("- **%s**", name)
+			if displayName != "" && displayName != name {
+				result += fmt.Sprintf(" (%s)", displayName)
+			}
+			result += fmt.Sprintf("\n  Type: %s | Records: %.0f | Size: %.2f GB | Retention: %.0f days",
+				bucketType, recordCount, sizeGB, retentionDays)
+			if metricInterval != "" {
+				result += fmt.Sprintf(" | Metric Interval: %s", metricInterval)
+			}
+			result += "\n"
+			return result
 		}
 
 		resp += fmt.Sprintf("## Data Buckets (%d)\n\n", len(userBuckets))
