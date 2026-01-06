@@ -9,6 +9,8 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"github.com/dynatrace-oss/go-mcp-dynatrace/pkg/auth"
 )
 
 // ToolHandler is a function that handles a tool call
@@ -192,12 +194,40 @@ func (s *Server) Run() error {
 	}
 }
 
-// RunHTTP starts the server in HTTP mode
+// RunHTTP starts the server in HTTP mode with optional authentication
 func (s *Server) RunHTTP(addr string) error {
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	mux := http.NewServeMux()
+
+	// Health check endpoint (no auth required)
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status": "healthy",
+			"server": s.name,
+		})
+	})
+
+	// MCP endpoint with authentication
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
+		}
+
+		// Check authentication if enabled
+		if auth.IsAuthEnabled() {
+			token := r.Header.Get(auth.AuthHeaderName)
+			if !auth.ValidateAgainstExpected(token) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusUnauthorized)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"jsonrpc": "2.0",
+					"id":      nil,
+					"error":   map[string]interface{}{"code": -32001, "message": "Unauthorized: invalid or missing authentication token"},
+				})
+				return
+			}
 		}
 
 		body, err := io.ReadAll(r.Body)
@@ -219,8 +249,12 @@ func (s *Server) RunHTTP(addr string) error {
 		}
 	})
 
-	fmt.Fprintf(s.stderr, "Dynatrace MCP Server running on HTTP at %s\n", addr)
-	return http.ListenAndServe(addr, nil)
+	if auth.IsAuthEnabled() {
+		fmt.Fprintf(s.stderr, "Dynatrace MCP Server running on HTTP at %s (authentication enabled)\n", addr)
+	} else {
+		fmt.Fprintf(s.stderr, "Dynatrace MCP Server running on HTTP at %s (authentication disabled)\n", addr)
+	}
+	return http.ListenAndServe(addr, mux)
 }
 
 func trimLine(s string) string {

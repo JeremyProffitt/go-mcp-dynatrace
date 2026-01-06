@@ -1,0 +1,76 @@
+{
+  "family": "go-mcp-dynatrace",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "256",
+  "memory": "512",
+  "executionRoleArn": "arn:aws:iam::YOUR_ACCOUNT_ID:role/ecsTaskExecutionRole",
+  "taskRoleArn": "arn:aws:iam::YOUR_ACCOUNT_ID:role/ecsTaskRole",
+  "containerDefinitions": [
+    {
+      "name": "go-mcp-dynatrace",
+      "image": "YOUR_ACCOUNT_ID.dkr.ecr.YOUR_REGION.amazonaws.com/go-mcp-dynatrace:latest",
+      "essential": true,
+      "portMappings": [
+        {
+          "containerPort": 3000,
+          "hostPort": 3000,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        {
+          "name": "MCP_LOG_LEVEL",
+          "value": "info"
+        }
+      ],
+      "secrets": [
+        {
+          "name": "DT_ENVIRONMENT",
+          "valueFrom": "arn:aws:secretsmanager:YOUR_REGION:YOUR_ACCOUNT_ID:secret:mcp/dynatrace:DT_ENVIRONMENT::"
+        },
+        {
+          "name": "OAUTH_CLIENT_ID",
+          "valueFrom": "arn:aws:secretsmanager:YOUR_REGION:YOUR_ACCOUNT_ID:secret:mcp/dynatrace:OAUTH_CLIENT_ID::"
+        },
+        {
+          "name": "OAUTH_CLIENT_SECRET",
+          "valueFrom": "arn:aws:secretsmanager:YOUR_REGION:YOUR_ACCOUNT_ID:secret:mcp/dynatrace:OAUTH_CLIENT_SECRET::"
+        },
+        {
+          "name": "DT_ACCOUNT_URN",
+          "valueFrom": "arn:aws:secretsmanager:YOUR_REGION:YOUR_ACCOUNT_ID:secret:mcp/dynatrace:DT_ACCOUNT_URN::"
+        },
+        {
+          "name": "MCP_AUTH_TOKEN",
+          "valueFrom": "arn:aws:secretsmanager:YOUR_REGION:YOUR_ACCOUNT_ID:secret:mcp/dynatrace:MCP_AUTH_TOKEN::"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/go-mcp-dynatrace",
+          "awslogs-region": "YOUR_REGION",
+          "awslogs-stream-prefix": "ecs"
+        }
+      },
+      "healthCheck": {
+        "command": ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3000/health || exit 1"],
+        "interval": 30,
+        "timeout": 10,
+        "retries": 3,
+        "startPeriod": 5
+      }
+    }
+  ],
+  "tags": [
+    {
+      "key": "Application",
+      "value": "go-mcp-dynatrace"
+    },
+    {
+      "key": "Environment",
+      "value": "production"
+    }
+  ]
+}
