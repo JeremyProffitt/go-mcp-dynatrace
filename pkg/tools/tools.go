@@ -118,6 +118,124 @@ func getBool(args map[string]interface{}, key string, defaultVal bool) bool {
 	return defaultVal
 }
 
+func getStringSlice(args map[string]interface{}, key string) []string {
+	val, ok := args[key]
+	if !ok {
+		return nil
+	}
+	// Handle []interface{} from JSON unmarshaling
+	if arr, ok := val.([]interface{}); ok {
+		result := make([]string, 0, len(arr))
+		for _, v := range arr {
+			if s, ok := v.(string); ok {
+				result = append(result, s)
+			}
+		}
+		return result
+	}
+	return nil
+}
+
+// filterRecordFields returns records with only the specified fields
+func filterRecordFields(records []map[string]interface{}, fields []string) []map[string]interface{} {
+	if len(fields) == 0 {
+		return records
+	}
+	fieldSet := make(map[string]bool, len(fields))
+	for _, f := range fields {
+		fieldSet[f] = true
+	}
+
+	result := make([]map[string]interface{}, len(records))
+	for i, record := range records {
+		filtered := make(map[string]interface{})
+		for _, field := range fields {
+			if val, ok := record[field]; ok {
+				filtered[field] = val
+			}
+		}
+		result[i] = filtered
+	}
+	return result
+}
+
+// formatRecords formats records according to the specified output format
+func formatRecords(records []map[string]interface{}, format string) string {
+	switch format {
+	case "lines":
+		// Extract content field only, one per line
+		var lines []string
+		for _, record := range records {
+			if content, ok := record["content"].(string); ok {
+				lines = append(lines, content)
+			} else {
+				// Fallback: serialize the record as compact JSON
+				if b, err := json.Marshal(record); err == nil {
+					lines = append(lines, string(b))
+				}
+			}
+		}
+		return strings.Join(lines, "\n")
+
+	case "full":
+		// Pretty-printed JSON (original behavior)
+		recordsJSON, _ := json.MarshalIndent(records, "", "  ")
+		return "```json\n" + string(recordsJSON) + "\n```"
+
+	case "compact":
+		fallthrough
+	default:
+		// One JSON object per line (JSONL format)
+		var lines []string
+		for _, record := range records {
+			if b, err := json.Marshal(record); err == nil {
+				lines = append(lines, string(b))
+			}
+		}
+		return "```jsonl\n" + strings.Join(lines, "\n") + "\n```"
+	}
+}
+
+// appendTimestampFilter modifies a DQL query to filter records after a given timestamp
+func appendTimestampFilter(query string, continueFrom string) string {
+	// Insert filter before any limit clause or at the end
+	query = strings.TrimSpace(query)
+
+	// Check if query already has a limit
+	lowerQuery := strings.ToLower(query)
+	limitIdx := strings.LastIndex(lowerQuery, "| limit")
+
+	filter := fmt.Sprintf("| filter timestamp < %s", continueFrom)
+
+	if limitIdx > 0 {
+		// Insert before limit
+		return query[:limitIdx] + filter + " " + query[limitIdx:]
+	}
+	// Append to end
+	return query + " " + filter
+}
+
+// extractContinueFromCursor extracts the timestamp from the last record for pagination
+func extractContinueFromCursor(records []map[string]interface{}, limit int) string {
+	if len(records) <= limit || limit <= 0 {
+		return ""
+	}
+	// Use the timestamp from the last returned record (at index limit-1)
+	lastRecord := records[limit-1]
+	if ts, ok := lastRecord["timestamp"]; ok {
+		// Handle different timestamp formats
+		switch v := ts.(type) {
+		case string:
+			return v
+		case float64:
+			return fmt.Sprintf("%.0f", v)
+		case int64:
+			return fmt.Sprintf("%d", v)
+		}
+	}
+	return ""
+}
+
 // deriveDQLQueryName extracts a descriptive name from a DQL query for file logging
 func deriveDQLQueryName(query string) string {
 	// Trim whitespace and get the first line
@@ -179,7 +297,7 @@ func getStringArray(args map[string]interface{}, key string) []string {
 func (r *Registry) registerGetEnvironmentInfo(server *mcp.Server) {
 	server.RegisterTool(mcp.Tool{
 		Name:        "get_environment_info",
-		Description: "Get information about the connected Dynatrace Environment (Tenant) and verify the connection and authentication.",
+		Description: "[Discovery Tool] Get information about the connected Dynatrace Environment (Tenant) and verify the connection and authentication. Use this first to confirm connectivity.",
 		InputSchema: mcp.JSONSchema{
 			Type:       "object",
 			Properties: map[string]mcp.Property{},
@@ -216,28 +334,28 @@ func (r *Registry) registerListProblems(server *mcp.Server) {
 
 	server.RegisterTool(mcp.Tool{
 		Name:        "list_problems",
-		Description: "List all problems (based on \"fetch dt.davis.problems\") known on Dynatrace, sorted by their recency.",
+		Description: "[Query Tool] List all problems (based on \"fetch dt.davis.problems\") known on Dynatrace, sorted by their recency. Use this to monitor active incidents and historical issues.",
 		InputSchema: mcp.JSONSchema{
 			Type: "object",
 			Properties: map[string]mcp.Property{
 				"timeframe": {
 					Type:        "string",
-					Description: "Timeframe to query problems (e.g., \"12h\", \"24h\", \"7d\", \"30d\"). Default: \"24h\".",
+					Description: "Timeframe to query problems. Examples: '1h' (1 hour), '12h' (12 hours), '24h' (1 day), '7d' (1 week), '30d' (1 month). Default: '24h'.",
 					Default:     "24h",
 				},
 				"status": {
 					Type:        "string",
-					Description: "Filter problems by status: ACTIVE, CLOSED, or ALL (default).",
+					Description: "Filter problems by status: ACTIVE (ongoing), CLOSED (resolved), or ALL (both). Default: ALL.",
 					Enum:        []string{"ACTIVE", "CLOSED", "ALL"},
 					Default:     "ALL",
 				},
 				"additionalFilter": {
 					Type:        "string",
-					Description: "Additional DQL filter for dt.davis.problems.",
+					Description: "Additional DQL filter expression for dt.davis.problems. Examples: 'event.category == \"AVAILABILITY\"', 'contains(event.name, \"CPU\")', 'affected_entity_count > 5'. Uses DQL filter syntax.",
 				},
 				"maxProblemsToDisplay": {
 					Type:        "number",
-					Description: "Maximum number of problems to display (1-5000).",
+					Description: "Maximum number of problems to return. Range: 1-5000. Default: 10.",
 					Default:     10,
 					Minimum:     &minVal,
 					Maximum:     &maxVal,
@@ -312,25 +430,34 @@ Next Steps:
 }
 
 func (r *Registry) registerListVulnerabilities(server *mcp.Server) {
+	minRisk := float64(0)
+	maxRisk := float64(10)
+	minResults := float64(1)
+	maxResults := float64(1000)
+
 	server.RegisterTool(mcp.Tool{
 		Name:        "list_vulnerabilities",
-		Description: "Retrieve all active (non-muted) vulnerabilities from Dynatrace for the last 30 days.",
+		Description: "[Security Tool] Retrieve all active (non-muted) vulnerabilities from Dynatrace for the last 30 days. Use for security posture assessment and CVE tracking.",
 		InputSchema: mcp.JSONSchema{
 			Type: "object",
 			Properties: map[string]mcp.Property{
 				"riskScore": {
 					Type:        "number",
-					Description: "Minimum risk score of vulnerabilities to list (default: 8.0)",
+					Description: "Minimum risk score of vulnerabilities to list. Range: 0.0-10.0 (CVSS score). Default: 8.0 (High/Critical).",
 					Default:     8.0,
+					Minimum:     &minRisk,
+					Maximum:     &maxRisk,
 				},
 				"additionalFilter": {
 					Type:        "string",
-					Description: "Additional DQL-based filter for vulnerabilities.",
+					Description: "Additional DQL filter expression for vulnerabilities. Examples: 'vulnerability.risk.level == \"CRITICAL\"', 'contains(vulnerability.title, \"Log4j\")', 'affected_entity.type == \"SERVICE\"'. Uses DQL filter syntax.",
 				},
 				"maxVulnerabilitiesToDisplay": {
 					Type:        "number",
-					Description: "Maximum number of vulnerabilities to display.",
+					Description: "Maximum number of vulnerabilities to return. Range: 1-1000. Default: 25.",
 					Default:     25,
+					Minimum:     &minResults,
+					Maximum:     &maxResults,
 				},
 			},
 		},
@@ -404,25 +531,30 @@ Next Steps:
 }
 
 func (r *Registry) registerFindEntityByName(server *mcp.Server) {
+	minResults := float64(1)
+	maxResults := float64(500)
+
 	server.RegisterTool(mcp.Tool{
 		Name:        "find_entity_by_name",
-		Description: "Find the entityId and type of a monitored entity (service, host, process-group, application, etc.) based on name.",
+		Description: "[Discovery Tool] Find the entityId and type of a monitored entity (service, host, process-group, application, etc.) based on name. Essential for getting entity IDs to use in other queries.",
 		InputSchema: mcp.JSONSchema{
 			Type: "object",
 			Properties: map[string]mcp.Property{
 				"entityNames": {
 					Type:        "array",
-					Description: "Names of the entities to search for.",
+					Description: "Names of the entities to search for. Supports partial matching. Example: ['payment-service', 'frontend'].",
 					Items:       &mcp.Property{Type: "string"},
 				},
 				"maxEntitiesToDisplay": {
 					Type:        "number",
-					Description: "Maximum number of entities to display.",
+					Description: "Maximum number of entities to return. Range: 1-500. Default: 10.",
 					Default:     10,
+					Minimum:     &minResults,
+					Maximum:     &maxResults,
 				},
 				"extendedSearch": {
 					Type:        "boolean",
-					Description: "Set to true for comprehensive search over all entity types.",
+					Description: "Set to true for comprehensive search over all entity types. Default: false.",
 					Default:     false,
 				},
 			},
@@ -497,25 +629,49 @@ Next Steps:
 }
 
 func (r *Registry) registerExecuteDQL(server *mcp.Server) {
+	minRecords := float64(1)
+	maxRecords := float64(100)
+	minSize := float64(1)
+	maxSize := float64(10)
+
 	server.RegisterTool(mcp.Tool{
 		Name:        "execute_dql",
-		Description: "Get data like Logs, Metrics, Spans, Events, or Entity Data from Dynatrace GRAIL by executing a DQL statement.",
+		Description: "[Query Tool] Get data like Logs, Metrics, Spans, Events, or Entity Data from Dynatrace GRAIL by executing a DQL statement. This is the primary tool for querying Dynatrace data.",
 		InputSchema: mcp.JSONSchema{
 			Type: "object",
 			Properties: map[string]mcp.Property{
 				"dqlStatement": {
 					Type:        "string",
-					Description: "DQL Statement to execute.",
+					Description: "DQL (Dynatrace Query Language) statement to execute. Example: 'fetch logs | filter loglevel == \"ERROR\" | limit 10'. Use verify_dql first for complex queries.",
 				},
 				"recordLimit": {
 					Type:        "number",
-					Description: "Maximum number of records to return (default: 100).",
-					Default:     100,
+					Description: "Maximum number of records to return. Range: 1-100. Default: 50. Use pagination (continueFrom) for more records.",
+					Default:     50,
+					Minimum:     &minRecords,
+					Maximum:     &maxRecords,
 				},
 				"recordSizeLimitMB": {
 					Type:        "number",
-					Description: "Maximum size of returned records in MB (default: 1).",
+					Description: "Maximum size of returned records in MB. Range: 1-10. Default: 1. Increase for queries returning large records.",
 					Default:     1,
+					Minimum:     &minSize,
+					Maximum:     &maxSize,
+				},
+				"outputFormat": {
+					Type:        "string",
+					Description: "Output format: 'full' (indented JSON), 'compact' (JSONL, one record per line), 'lines' (content field only as plain text). Default: 'compact'.",
+					Enum:        []string{"full", "compact", "lines"},
+					Default:     "compact",
+				},
+				"fields": {
+					Type:        "array",
+					Description: "List of field names to include in output. If empty, all fields are returned. Example: ['timestamp', 'content', 'loglevel'].",
+					Items:       &mcp.Property{Type: "string"},
+				},
+				"continueFrom": {
+					Type:        "string",
+					Description: "Pagination cursor from previous response. Pass the 'continueFrom' value from a previous result to get the next page of records.",
 				},
 			},
 			Required: []string{"dqlStatement"},
@@ -529,17 +685,35 @@ func (r *Registry) registerExecuteDQL(server *mcp.Server) {
 		logging.ToolCall("execute_dql", args, 0, false)
 
 		dqlStatement := getString(args, "dqlStatement", "")
-		recordLimit := getInt(args, "recordLimit", 100)
+		recordLimit := getInt(args, "recordLimit", 50)
 		recordSizeLimitMB := getInt(args, "recordSizeLimitMB", 1)
+		outputFormat := getString(args, "outputFormat", "compact")
+		fields := getStringSlice(args, "fields")
+		continueFrom := getString(args, "continueFrom", "")
 
 		if dqlStatement == "" {
 			return errorResult("dqlStatement is required"), nil
 		}
 
+		// Hard cap at 100 records
+		const maxRecordLimit = 100
+		if recordLimit > maxRecordLimit {
+			recordLimit = maxRecordLimit
+		}
+
+		// Request one extra record to detect if more results exist
+		queryLimit := recordLimit + 1
+
+		// Apply continueFrom filter if provided (timestamp-based pagination)
+		effectiveQuery := dqlStatement
+		if continueFrom != "" {
+			effectiveQuery = appendTimestampFilter(dqlStatement, continueFrom)
+		}
+
 		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 		defer cancel()
 
-		result, err := r.client.ExecuteDQL(ctx, dqlStatement, recordLimit, recordSizeLimitMB*1024*1024)
+		result, err := r.client.ExecuteDQL(ctx, effectiveQuery, queryLimit, recordSizeLimitMB*1024*1024)
 		if err != nil {
 			return errorResult(fmt.Sprintf("DQL execution failed: %s", err.Error())), nil
 		}
@@ -574,17 +748,36 @@ func (r *Registry) registerExecuteDQL(server *mcp.Server) {
 
 		if result.Result != nil {
 			records := result.Result.Records
-			resp += fmt.Sprintf("\n**Query Results** (%d records):\n\n", len(records))
 
-			if len(records) > 0 {
-				recordsJSON, _ := json.MarshalIndent(records, "", "  ")
-				resp += "```json\n" + string(recordsJSON) + "\n```"
-			} else {
-				resp += "No records returned."
+			// Determine if there are more results
+			hasMore := len(records) > recordLimit
+			if hasMore {
+				records = records[:recordLimit] // Trim to requested limit
 			}
 
-			if len(records) == recordLimit {
-				resp += fmt.Sprintf("\n\n**Record Limit Reached:** Results limited to %d records.", recordLimit)
+			// Apply field selection if specified
+			if len(fields) > 0 {
+				records = filterRecordFields(records, fields)
+			}
+
+			resp += fmt.Sprintf("\n**Results:** %d records", len(records))
+			if hasMore {
+				resp += " (more available)"
+			}
+			resp += "\n\n"
+
+			if len(records) > 0 {
+				resp += formatRecords(records, outputFormat)
+
+				// Add pagination cursor if more results exist
+				if hasMore {
+					cursor := extractContinueFromCursor(result.Result.Records, recordLimit)
+					if cursor != "" {
+						resp += fmt.Sprintf("\n\n**Pagination:**\n- `hasMore`: true\n- `continueFrom`: `%s`", cursor)
+					}
+				}
+			} else {
+				resp += "No records returned."
 			}
 		}
 
@@ -595,13 +788,13 @@ func (r *Registry) registerExecuteDQL(server *mcp.Server) {
 func (r *Registry) registerVerifyDQL(server *mcp.Server) {
 	server.RegisterTool(mcp.Tool{
 		Name:        "verify_dql",
-		Description: "Syntactically verify a DQL statement before executing it.",
+		Description: "[Query Tool] Syntactically verify a DQL statement before executing it. Use this to validate complex queries and get error messages without consuming query budget.",
 		InputSchema: mcp.JSONSchema{
 			Type: "object",
 			Properties: map[string]mcp.Property{
 				"dqlStatement": {
 					Type:        "string",
-					Description: "DQL Statement to verify.",
+					Description: "DQL (Dynatrace Query Language) statement to verify. Validates syntax without executing the query.",
 				},
 			},
 			Required: []string{"dqlStatement"},
@@ -650,13 +843,13 @@ func (r *Registry) registerVerifyDQL(server *mcp.Server) {
 func (r *Registry) registerGenerateDQLFromNL(server *mcp.Server) {
 	server.RegisterTool(mcp.Tool{
 		Name:        "generate_dql_from_natural_language",
-		Description: "Convert natural language queries to DQL using Davis CoPilot AI.",
+		Description: "[AI Tool] Convert natural language queries to DQL using Davis CoPilot AI. Useful when you're unsure of the DQL syntax for a particular query.",
 		InputSchema: mcp.JSONSchema{
 			Type: "object",
 			Properties: map[string]mcp.Property{
 				"text": {
 					Type:        "string",
-					Description: "Natural language description of what you want to query.",
+					Description: "Natural language description of what you want to query. Example: 'show me all error logs from the payment service in the last hour'.",
 				},
 			},
 			Required: []string{"text"},
@@ -708,13 +901,13 @@ func (r *Registry) registerGenerateDQLFromNL(server *mcp.Server) {
 func (r *Registry) registerExplainDQLInNL(server *mcp.Server) {
 	server.RegisterTool(mcp.Tool{
 		Name:        "explain_dql_in_natural_language",
-		Description: "Explain DQL statements in natural language using Davis CoPilot AI.",
+		Description: "[AI Tool] Explain DQL statements in natural language using Davis CoPilot AI. Useful for understanding existing queries.",
 		InputSchema: mcp.JSONSchema{
 			Type: "object",
 			Properties: map[string]mcp.Property{
 				"dql": {
 					Type:        "string",
-					Description: "The DQL statement to explain.",
+					Description: "The DQL statement to explain. Can be any valid DQL query.",
 				},
 			},
 			Required: []string{"dql"},
@@ -752,21 +945,21 @@ func (r *Registry) registerExplainDQLInNL(server *mcp.Server) {
 func (r *Registry) registerChatWithDavisCopilot(server *mcp.Server) {
 	server.RegisterTool(mcp.Tool{
 		Name:        "chat_with_davis_copilot",
-		Description: "Use this tool to ask any Dynatrace related question when no other specific tool is available.",
+		Description: "[AI Tool] Use this tool to ask any Dynatrace related question when no other specific tool is available. Davis CoPilot has knowledge of Dynatrace concepts, best practices, and can provide guidance.",
 		InputSchema: mcp.JSONSchema{
 			Type: "object",
 			Properties: map[string]mcp.Property{
 				"text": {
 					Type:        "string",
-					Description: "Your question or request for Davis CoPilot.",
+					Description: "Your question or request for Davis CoPilot. Example: 'How do I investigate high CPU usage on a host?'",
 				},
 				"context": {
 					Type:        "string",
-					Description: "Optional context to provide additional information.",
+					Description: "Optional context to provide additional information. Example: 'I am investigating problem P-12345 which shows high error rates'.",
 				},
 				"instruction": {
 					Type:        "string",
-					Description: "Optional instruction for response formatting.",
+					Description: "Optional instruction for response formatting. Example: 'Provide a step-by-step guide' or 'Keep the response brief'.",
 				},
 			},
 			Required: []string{"text"},
@@ -836,7 +1029,7 @@ func (r *Registry) registerChatWithDavisCopilot(server *mcp.Server) {
 func (r *Registry) registerListDavisAnalyzers(server *mcp.Server) {
 	server.RegisterTool(mcp.Tool{
 		Name:        "list_davis_analyzers",
-		Description: "List all available Davis Analyzers in Dynatrace (forecast, anomaly detection, correlation analyzers, and more).",
+		Description: "[Discovery Tool] List all available Davis Analyzers in Dynatrace (forecast, anomaly detection, correlation analyzers, and more). Use this to discover what analyzers can be used with execute_davis_analyzer.",
 		InputSchema: mcp.JSONSchema{
 			Type:       "object",
 			Properties: map[string]mcp.Property{},
@@ -884,26 +1077,26 @@ func (r *Registry) registerListDavisAnalyzers(server *mcp.Server) {
 func (r *Registry) registerExecuteDavisAnalyzer(server *mcp.Server) {
 	server.RegisterTool(mcp.Tool{
 		Name:        "execute_davis_analyzer",
-		Description: "Execute a Davis Analyzer with custom input parameters.",
+		Description: "[Analysis Tool] Execute a Davis Analyzer with custom input parameters. Use list_davis_analyzers first to see available analyzers and their required input parameters.",
 		InputSchema: mcp.JSONSchema{
 			Type: "object",
 			Properties: map[string]mcp.Property{
 				"analyzerName": {
 					Type:        "string",
-					Description: "The name of the Davis Analyzer to execute.",
+					Description: "The name of the Davis Analyzer to execute. Use list_davis_analyzers to get valid names.",
 				},
 				"input": {
 					Type:        "object",
-					Description: "Input parameters for the analyzer as a JSON object.",
+					Description: "Input parameters for the analyzer as a JSON object. Structure varies by analyzer - common fields include: 'timeseries' (array of metric data), 'query' (DQL query string), 'entityId' (target entity). Example: {\"timeseries\": [{\"timestamps\": [...], \"values\": [...]}]}",
 				},
 				"timeframeStart": {
 					Type:        "string",
-					Description: "Start time for the analysis (default: now-1h).",
+					Description: "Start time for the analysis. Supports relative (e.g., 'now-1h', 'now-24h', 'now-7d') or ISO 8601 timestamps. Default: 'now-1h'.",
 					Default:     "now-1h",
 				},
 				"timeframeEnd": {
 					Type:        "string",
-					Description: "End time for the analysis (default: now).",
+					Description: "End time for the analysis. Supports relative (e.g., 'now') or ISO 8601 timestamps. Default: 'now'.",
 					Default:     "now",
 				},
 			},
@@ -972,23 +1165,26 @@ func (r *Registry) registerExecuteDavisAnalyzer(server *mcp.Server) {
 }
 
 func (r *Registry) registerGetKubernetesEvents(server *mcp.Server) {
+	minEvents := float64(1)
+	maxEvents := float64(500)
+
 	server.RegisterTool(mcp.Tool{
 		Name:        "get_kubernetes_events",
-		Description: "Get all events from a specific Kubernetes (K8s) cluster.",
+		Description: "[Query Tool] Get all events from a specific Kubernetes (K8s) cluster. Use for monitoring cluster health and investigating K8s-related issues.",
 		InputSchema: mcp.JSONSchema{
 			Type: "object",
 			Properties: map[string]mcp.Property{
 				"clusterId": {
 					Type:        "string",
-					Description: "The Kubernetes Cluster Id (k8s.cluster.uid).",
+					Description: "The Kubernetes Cluster Id (k8s.cluster.uid). Find this using find_entity_by_name or execute_dql.",
 				},
 				"kubernetesEntityId": {
 					Type:        "string",
-					Description: "The Dynatrace Kubernetes Entity Id (dt.entity.kubernetes_cluster).",
+					Description: "The Dynatrace Kubernetes Entity Id (dt.entity.kubernetes_cluster). Alternative to clusterId.",
 				},
 				"eventType": {
 					Type:        "string",
-					Description: "Filter by event type.",
+					Description: "Filter by event type. Leave empty for all event types.",
 					Enum: []string{
 						"COMPLIANCE_FINDING", "COMPLIANCE_SCAN_COMPLETED", "CUSTOM_INFO",
 						"DETECTION_FINDING", "ERROR_EVENT", "OSI_UNEXPECTEDLY_UNAVAILABLE",
@@ -1000,8 +1196,10 @@ func (r *Registry) registerGetKubernetesEvents(server *mcp.Server) {
 				},
 				"maxEventsToDisplay": {
 					Type:        "number",
-					Description: "Maximum number of events to display.",
+					Description: "Maximum number of events to return. Range: 1-500. Default: 10.",
 					Default:     10,
+					Minimum:     &minEvents,
+					Maximum:     &maxEvents,
 				},
 			},
 		},
@@ -1072,25 +1270,30 @@ func (r *Registry) registerGetKubernetesEvents(server *mcp.Server) {
 }
 
 func (r *Registry) registerListExceptions(server *mcp.Server) {
+	minExceptions := float64(1)
+	maxExceptions := float64(500)
+
 	server.RegisterTool(mcp.Tool{
 		Name:        "list_exceptions",
-		Description: "List all exceptions known on Dynatrace starting with the most recent.",
+		Description: "[Query Tool] List all exceptions known on Dynatrace starting with the most recent. Use for tracking application errors and investigating stack traces.",
 		InputSchema: mcp.JSONSchema{
 			Type: "object",
 			Properties: map[string]mcp.Property{
 				"timeframe": {
 					Type:        "string",
-					Description: "Timeframe to query exceptions (e.g., \"12h\", \"24h\", \"7d\"). Default: \"24h\".",
+					Description: "Timeframe to query exceptions. Examples: '1h' (1 hour), '12h' (12 hours), '24h' (1 day), '7d' (1 week). Default: '24h'.",
 					Default:     "24h",
 				},
 				"additionalFilter": {
 					Type:        "string",
-					Description: "Additional DQL filter for user.events.",
+					Description: "Additional DQL filter expression for user.events. Examples: 'error.type == \"NullPointerException\"', 'contains(exception.message, \"timeout\")', 'os.name == \"Linux\"'. Uses DQL filter syntax.",
 				},
 				"maxExceptionsToDisplay": {
 					Type:        "number",
-					Description: "Maximum number of exceptions to display.",
+					Description: "Maximum number of exceptions to return. Range: 1-500. Default: 10.",
 					Default:     10,
+					Minimum:     &minExceptions,
+					Maximum:     &maxExceptions,
 				},
 			},
 		},
@@ -1155,28 +1358,29 @@ Next Steps:
 func (r *Registry) registerCreateWorkflowForNotification(server *mcp.Server) {
 	server.RegisterTool(mcp.Tool{
 		Name:        "create_workflow_for_notification",
-		Description: "Create a notification workflow for a team based on a problem type within Dynatrace Workflows.",
+		Description: "[Write Tool] Create a notification workflow for a team based on a problem type within Dynatrace Workflows. Creates a new automation workflow that triggers notifications when problems occur.",
 		InputSchema: mcp.JSONSchema{
 			Type: "object",
 			Properties: map[string]mcp.Property{
 				"problemType": {
 					Type:        "string",
-					Description: "Type of problem to notify about.",
+					Description: "Type of problem to notify about (e.g., 'AVAILABILITY', 'ERROR', 'PERFORMANCE', 'RESOURCE', 'CUSTOM').",
 				},
 				"teamName": {
 					Type:        "string",
-					Description: "Name of the team to notify.",
+					Description: "Name of the team to notify. Used in workflow title and description.",
 				},
 				"channel": {
 					Type:        "string",
-					Description: "Notification channel (e.g., Slack channel).",
+					Description: "Notification channel name (e.g., '#alerts', '#platform-team').",
 				},
 				"isPrivate": {
 					Type:        "boolean",
-					Description: "Make workflow private (default: false).",
+					Description: "Make workflow private (only visible to creator). Default: false.",
 					Default:     false,
 				},
 			},
+			Required: []string{"problemType", "teamName", "channel"},
 		},
 		Annotations: &mcp.ToolAnnotation{
 			Title:          "Create Workflow for Notification",
@@ -1219,13 +1423,13 @@ func (r *Registry) registerCreateWorkflowForNotification(server *mcp.Server) {
 func (r *Registry) registerMakeWorkflowPublic(server *mcp.Server) {
 	server.RegisterTool(mcp.Tool{
 		Name:        "make_workflow_public",
-		Description: "Make a workflow publicly available to everyone on the Dynatrace Environment.",
+		Description: "[Write Tool] Make a workflow publicly available to everyone on the Dynatrace Environment. Changes the workflow visibility from private to public.",
 		InputSchema: mcp.JSONSchema{
 			Type: "object",
 			Properties: map[string]mcp.Property{
 				"workflowId": {
 					Type:        "string",
-					Description: "ID of the workflow to make public.",
+					Description: "ID of the workflow to make public. Get this from create_workflow_for_notification or the Dynatrace UI.",
 				},
 			},
 			Required: []string{"workflowId"},
@@ -1263,23 +1467,23 @@ func (r *Registry) registerMakeWorkflowPublic(server *mcp.Server) {
 func (r *Registry) registerSendEmail(server *mcp.Server) {
 	server.RegisterTool(mcp.Tool{
 		Name:        "send_email",
-		Description: "Send an email using the Dynatrace Email API. Maximum 10 recipients total.",
+		Description: "[Write Tool] Send an email using the Dynatrace Email API. Maximum 10 recipients total. Useful for notifications and alerts.",
 		InputSchema: mcp.JSONSchema{
 			Type: "object",
 			Properties: map[string]mcp.Property{
 				"toRecipients": {
 					Type:        "array",
-					Description: "Array of email addresses for TO recipients.",
+					Description: "Array of email addresses for TO recipients. Example: ['user@example.com', 'team@example.com'].",
 					Items:       &mcp.Property{Type: "string"},
 				},
 				"ccRecipients": {
 					Type:        "array",
-					Description: "Array of email addresses for CC recipients.",
+					Description: "Array of email addresses for CC recipients (optional).",
 					Items:       &mcp.Property{Type: "string"},
 				},
 				"bccRecipients": {
 					Type:        "array",
-					Description: "Array of email addresses for BCC recipients.",
+					Description: "Array of email addresses for BCC recipients (optional).",
 					Items:       &mcp.Property{Type: "string"},
 				},
 				"subject": {
@@ -1288,13 +1492,14 @@ func (r *Registry) registerSendEmail(server *mcp.Server) {
 				},
 				"body": {
 					Type:        "string",
-					Description: "Body content of the email (plain text).",
+					Description: "Body content of the email (plain text only).",
 				},
 			},
 			Required: []string{"toRecipients", "subject", "body"},
 		},
 		Annotations: &mcp.ToolAnnotation{
 			Title:         "Send Email",
+			ReadOnlyHint:  false,
 			OpenWorldHint: true,
 		},
 	}, func(args map[string]interface{}) (*mcp.CallToolResult, error) {
@@ -1352,24 +1557,25 @@ func (r *Registry) registerSendEmail(server *mcp.Server) {
 func (r *Registry) registerSendSlackMessage(server *mcp.Server) {
 	server.RegisterTool(mcp.Tool{
 		Name:        "send_slack_message",
-		Description: "Send a Slack message to a dedicated Slack Channel via Slack Connector on Dynatrace.",
+		Description: "[Write Tool] Send a Slack message to a dedicated Slack Channel via Slack Connector on Dynatrace. Requires SLACK_CONNECTION_ID to be configured.",
 		InputSchema: mcp.JSONSchema{
 			Type: "object",
 			Properties: map[string]mcp.Property{
 				"channel": {
 					Type:        "string",
-					Description: "Slack channel to send the message to.",
+					Description: "Slack channel to send the message to. Example: '#alerts' or '#platform-team'.",
 				},
 				"message": {
 					Type:        "string",
-					Description: "Message content (Slack markdown supported).",
+					Description: "Message content. Supports Slack markdown formatting (e.g., *bold*, _italic_, `code`).",
 				},
 			},
 			Required: []string{"channel", "message"},
 		},
 		Annotations: &mcp.ToolAnnotation{
-			Title:        "Send Slack Message",
-			ReadOnlyHint: false,
+			Title:         "Send Slack Message",
+			ReadOnlyHint:  false,
+			OpenWorldHint: true,
 		},
 	}, func(args map[string]interface{}) (*mcp.CallToolResult, error) {
 		logging.ToolCall("send_slack_message", args, 0, false)
@@ -1401,7 +1607,7 @@ func (r *Registry) registerSendSlackMessage(server *mcp.Server) {
 func (r *Registry) registerResetGrailBudget(server *mcp.Server) {
 	server.RegisterTool(mcp.Tool{
 		Name:        "reset_grail_budget",
-		Description: "Reset the Grail query budget after it was exhausted, allowing new queries to be executed.",
+		Description: "[Admin Tool] Reset the Grail query budget after it was exhausted, allowing new queries to be executed. Use when you receive budget exceeded errors.",
 		InputSchema: mcp.JSONSchema{
 			Type:       "object",
 			Properties: map[string]mcp.Property{},
@@ -1434,13 +1640,13 @@ You can now execute new Grail queries again.`, state.BudgetLimitGB, state.Budget
 func (r *Registry) registerListBuckets(server *mcp.Server) {
 	server.RegisterTool(mcp.Tool{
 		Name:        "list_buckets",
-		Description: "List all available Grail data buckets with their metadata including retention, record counts, and size estimates. Use this to discover what data sources are available before querying.",
+		Description: "[Discovery Tool] List all available Grail data buckets with their metadata including retention, record counts, and size estimates. Start here to discover what data sources are available for querying with execute_dql.",
 		InputSchema: mcp.JSONSchema{
 			Type: "object",
 			Properties: map[string]mcp.Property{
 				"includeSystem": {
 					Type:        "boolean",
-					Description: "Include system buckets (dt.system.*) in the results. Default: false",
+					Description: "Include system buckets (dt.system.*) in the results. Default: false.",
 					Default:     false,
 				},
 			},
@@ -1544,20 +1750,25 @@ func (r *Registry) registerListBuckets(server *mcp.Server) {
 }
 
 func (r *Registry) registerDescribeBucket(server *mcp.Server) {
+	minSample := float64(1)
+	maxSample := float64(500)
+
 	server.RegisterTool(mcp.Tool{
 		Name:        "describe_bucket",
-		Description: "Get detailed schema information for a specific Grail bucket, including field names, types, and sample values. Essential for understanding what data is available before writing queries.",
+		Description: "[Discovery Tool] Get detailed schema information for a specific Grail bucket, including field names, types, and sample values. Essential for understanding what fields are available before writing DQL queries.",
 		InputSchema: mcp.JSONSchema{
 			Type: "object",
 			Properties: map[string]mcp.Property{
 				"bucket": {
 					Type:        "string",
-					Description: "Name of the bucket to describe (e.g., 'logs', 'events', 'spans', 'dt.davis.problems')",
+					Description: "Name of the bucket to describe. Common buckets: 'logs', 'events', 'spans', 'metrics', 'dt.davis.problems', 'security.events'. Use list_buckets to see all available buckets.",
 				},
 				"sampleSize": {
 					Type:        "number",
-					Description: "Number of sample records to analyze for field discovery. Default: 100",
+					Description: "Number of sample records to analyze for field discovery. Range: 1-500. Larger samples provide better field coverage but take longer. Default: 100.",
 					Default:     100,
+					Minimum:     &minSample,
+					Maximum:     &maxSample,
 				},
 			},
 			Required: []string{"bucket"},
@@ -1728,17 +1939,17 @@ func inferType(value interface{}) string {
 func (r *Registry) registerListTags(server *mcp.Server) {
 	server.RegisterTool(mcp.Tool{
 		Name:        "list_tags",
-		Description: "List all tags used across monitored entities in the Dynatrace environment. Tags help categorize and filter entities. Returns tag keys and their usage counts.",
+		Description: "[Discovery Tool] List all tags used across monitored entities in the Dynatrace environment. Tags help categorize and filter entities (e.g., environment:production, team:platform). Use this to discover available tags for filtering.",
 		InputSchema: mcp.JSONSchema{
 			Type: "object",
 			Properties: map[string]mcp.Property{
 				"entityType": {
 					Type:        "string",
-					Description: "Optional: Filter tags by entity type (e.g., 'host', 'service', 'process_group', 'application'). If not specified, returns tags from all entity types.",
+					Description: "Filter tags by entity type. Common types: 'host', 'service', 'process_group', 'application', 'kubernetes_cluster'. Leave empty for all entity types.",
 				},
 				"tagKeyFilter": {
 					Type:        "string",
-					Description: "Optional: Filter tag keys containing this substring (case-insensitive).",
+					Description: "Filter tag keys containing this substring (case-insensitive). Example: 'env' to find 'environment', 'env-type', etc.",
 				},
 			},
 		},
@@ -1885,24 +2096,29 @@ smartscapeNodes "*"
 }
 
 func (r *Registry) registerFindEntitiesByTag(server *mcp.Server) {
+	minResults := float64(1)
+	maxResults := float64(500)
+
 	server.RegisterTool(mcp.Tool{
 		Name:        "find_entities_by_tag",
-		Description: "Find all monitored entities that have a specific tag or tag pattern. Useful for discovering resources by their classification.",
+		Description: "[Discovery Tool] Find all monitored entities that have a specific tag or tag pattern. Useful for discovering resources by their classification (e.g., find all production services).",
 		InputSchema: mcp.JSONSchema{
 			Type: "object",
 			Properties: map[string]mcp.Property{
 				"tag": {
 					Type:        "string",
-					Description: "Tag to search for. Can be 'key:value' for exact match or just 'key' for all entities with that tag key.",
+					Description: "Tag to search for. Use 'key:value' for exact match (e.g., 'environment:production') or just 'key' for all entities with that tag key (e.g., 'environment').",
 				},
 				"entityType": {
 					Type:        "string",
-					Description: "Optional: Filter by entity type (e.g., 'host', 'service', 'process_group', 'application').",
+					Description: "Filter by entity type. Common types: 'host', 'service', 'process_group', 'application'. Leave empty to search all entity types.",
 				},
 				"maxResults": {
 					Type:        "number",
-					Description: "Maximum number of entities to return. Default: 50",
+					Description: "Maximum number of entities to return. Range: 1-500. Default: 50.",
 					Default:     50,
+					Minimum:     &minResults,
+					Maximum:     &maxResults,
 				},
 			},
 			Required: []string{"tag"},
