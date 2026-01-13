@@ -1,5 +1,64 @@
 # Project Guidelines
 
+## Overview
+
+This is **go-mcp-dynatrace**, a Go implementation of an MCP (Model Context Protocol) server for Dynatrace observability platform integration. The server enables LLMs to query logs, metrics, traces, events, and leverage Davis AI capabilities.
+
+## LLM Usage Guidelines
+
+### Tool Selection Strategy
+
+When helping users with Dynatrace tasks, follow this decision tree:
+
+1. **User asks about environment/connection** -> `get_environment_info`
+2. **User asks about current problems/incidents** -> `list_problems`
+3. **User asks about security/vulnerabilities** -> `list_vulnerabilities`
+4. **User wants to query data (logs, metrics, spans)** -> `execute_dql`
+5. **User describes query in natural language** -> `generate_dql_from_natural_language` then `execute_dql`
+6. **User needs to find entities** -> `find_entity_by_name`
+7. **User wants analysis/predictions** -> `list_davis_analyzers` then `execute_davis_analyzer`
+8. **User has general Dynatrace question** -> `chat_with_davis_copilot`
+
+### DQL Query Best Practices
+
+When constructing DQL queries:
+
+```dql
+# Always specify time range for large datasets
+fetch logs, from: now() - 1h
+
+# Filter early in the pipeline
+| filter loglevel == "ERROR"
+| filter contains(content, "timeout")
+
+# Select only needed fields
+| fields timestamp, content, loglevel
+
+# Use summarize for aggregations
+| summarize count(), by: {log.source}
+
+# Sort and limit results
+| sort timestamp desc
+| limit 100
+```
+
+### Common Mistakes to Avoid
+
+1. **Never query without time range** on large datasets - always use `from:`
+2. **Never filter after aggregation** - filter before `summarize`
+3. **Use `matchesPhrase` not `contains`** for indexed text search (better performance)
+4. **Always handle nulls** with `coalesce()` or `isNotNull()` filters
+5. **Avoid returning all fields** - use `fields` to select specific columns
+
+### Response Formatting
+
+When presenting Dynatrace data to users:
+- Format timestamps in human-readable form
+- Group related problems/events logically
+- Highlight severity levels clearly
+- Provide context for metrics (explain what values mean)
+- Suggest follow-up queries when appropriate
+
 ## AWS Deployment Policy
 
 **CRITICAL: All AWS infrastructure and code changes MUST be deployed via GitHub Actions pipelines.**

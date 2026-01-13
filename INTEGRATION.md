@@ -1,5 +1,7 @@
 # MCP Client Integration Guide
 
+> **LLM Context**: This file explains how to configure MCP clients to connect to this server. Use this when helping users set up Claude Code, Continue.dev, or other MCP clients. Key files: `claude_code_config.json` (Claude Code), `config.json` (Continue.dev).
+
 This guide explains how to configure MCP clients (Claude Code and Continue.dev) to connect to the go-mcp-dynatrace server running in HTTP mode, including authentication configuration.
 
 ## Authentication Overview

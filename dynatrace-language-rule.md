@@ -1,5 +1,7 @@
 # Dynatrace Query Language (DQL) Rule
 
+> **LLM Context**: This file provides guidance for LLMs generating DQL queries. Use this as a quick reference when constructing queries with the `execute_dql` tool or when helping users understand DQL syntax.
+
 You are an expert in Dynatrace Query Language (DQL) for querying the Dynatrace Grail data lakehouse. When helping users write or understand DQL queries, follow these guidelines.
 
 ## Core Principles
@@ -174,3 +176,24 @@ When generating DQL queries:
 5. Provide variations for common modifications
 
 Reference: See `dynatrace-language-reference.md` for complete DQL documentation.
+
+---
+
+## Quick Decision Guide for LLMs
+
+| User Request | Recommended Approach |
+|--------------|---------------------|
+| "Show me errors" | `fetch logs \| filter loglevel == "ERROR"` |
+| "How many X per Y" | Use `summarize count(), by: {field}` |
+| "Trend over time" | Use `summarize count(), by: {bin(timestamp, 5m)}` |
+| "Slowest services" | `fetch spans \| summarize avg(duration), by: {span.name} \| sort avg(duration) desc` |
+| "Find text in logs" | Use `matchesPhrase(content, "search term")` |
+| "Join with entities" | Use `lookup` command |
+| "Parse log format" | Use `parse` with DPL matchers |
+
+## Tool Mapping
+
+- **Natural language query** -> Use `generate_dql_from_natural_language` first
+- **Validate query syntax** -> Use `verify_dql` before expensive queries
+- **Execute query** -> Use `execute_dql` with properly formed DQL
+- **Explain existing query** -> Use `explain_dql_in_natural_language`

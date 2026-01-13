@@ -1,5 +1,7 @@
 # Dynatrace Query Language (DQL) Reference
 
+> **LLM Context**: This is the comprehensive DQL reference. For quick queries, see `dynatrace-language-rule.md`. This document is also available as an MCP resource via `resources/list` and can be fetched programmatically.
+
 This comprehensive reference documents the Dynatrace Query Language for use with Dynatrace Grail data lakehouse. DQL is a powerful, pipeline-based query language for analyzing observability data.
 
 ## Table of Contents

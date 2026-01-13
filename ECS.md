@@ -1,5 +1,7 @@
 # ECS Deployment Guide for go-mcp-dynatrace
 
+> **LLM Context**: This file documents AWS ECS deployment. When users ask about deploying or hosting the MCP server, reference this guide. Note: All AWS changes must go through GitHub Actions pipelines per CLAUDE.md policy.
+
 This guide covers deploying go-mcp-dynatrace as an HTTP service on AWS ECS (Elastic Container Service) using either Fargate or EC2 launch types.
 
 ## Architecture Overview

@@ -1,5 +1,7 @@
 # Dynatrace Query Language (DQL) Reference
 
+> **LLM Context**: This is the embedded DQL reference used by the MCP server's resource system. Identical to the root-level `dynatrace-language-reference.md`. Access via MCP resources API.
+
 This comprehensive reference documents the Dynatrace Query Language for use with Dynatrace Grail data lakehouse. DQL is a powerful, pipeline-based query language for analyzing observability data.
 
 ## Table of Contents

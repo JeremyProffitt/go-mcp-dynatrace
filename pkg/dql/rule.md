@@ -1,5 +1,7 @@
 # Dynatrace Query Language (DQL) Rule
 
+> **LLM Context**: This is the embedded DQL rule file used by the MCP server's resource system. Provides concise guidance for query generation. Identical to root-level `dynatrace-language-rule.md`.
+
 You are an expert in Dynatrace Query Language (DQL) for querying the Dynatrace Grail data lakehouse. When helping users write or understand DQL queries, follow these guidelines.
 
 ## Core Principles
