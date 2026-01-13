@@ -77,6 +77,24 @@ export DT_GRAIL_QUERY_BUDGET_GB="500"
 ./go-mcp-dynatrace -log-level debug
 ```
 
+### HTTP Mode Details
+
+When running in HTTP mode, the server exposes:
+- `POST /` - MCP JSON-RPC endpoint
+- `GET /health` - Health check endpoint (returns `{"status":"ok","version":"X.X.X"}`)
+
+**Authentication**: HTTP mode requires an `Authorization` header on all requests (except `/health`). The authorization layer is pluggable; by default it accepts any token.
+
+**Per-Request Credentials**: In HTTP mode, Dynatrace OAuth credentials can be passed via headers instead of environment variables, enabling multi-user scenarios:
+
+| Header | Description |
+|--------|-------------|
+| `X-DT-OAuth-Client-Id` | OAuth client ID (overrides `OAUTH_CLIENT_ID`) |
+| `X-DT-OAuth-Client-Secret` | OAuth client secret (overrides `OAUTH_CLIENT_SECRET`) |
+| `X-DT-Account-URN` | Account URN (overrides `DT_ACCOUNT_URN`) |
+
+These headers override the corresponding environment variables when present.
+
 ## Usage with Claude Desktop
 
 Add to your Claude Desktop configuration (`claude_desktop_config.json`):

@@ -203,8 +203,8 @@ func (s *Server) RunHTTP(addr string) error {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"status": "healthy",
-			"server": s.name,
+			"status":  "ok",
+			"version": s.version,
 		})
 	})
 
@@ -249,12 +249,15 @@ func (s *Server) RunHTTP(addr string) error {
 		}
 	})
 
+	// Wrap the mux with middlewares (credentials first, then auth)
+	handler := auth.AuthMiddleware(auth.CredentialsMiddleware(mux))
+
 	if auth.IsAuthEnabled() {
 		fmt.Fprintf(s.stderr, "Dynatrace MCP Server running on HTTP at %s (authentication enabled)\n", addr)
 	} else {
 		fmt.Fprintf(s.stderr, "Dynatrace MCP Server running on HTTP at %s (authentication disabled)\n", addr)
 	}
-	return http.ListenAndServe(addr, mux)
+	return http.ListenAndServe(addr, handler)
 }
 
 func trimLine(s string) string {

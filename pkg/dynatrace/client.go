@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/dynatrace-oss/go-mcp-dynatrace/pkg/auth"
 	"github.com/dynatrace-oss/go-mcp-dynatrace/pkg/logging"
 )
 
@@ -105,6 +106,31 @@ func NewClient(cfg Config) (*Client, error) {
 	return client, nil
 }
 
+// getEffectiveCredentials returns OAuth credentials from context if present,
+// otherwise falls back to the client's configured credentials
+func (c *Client) getEffectiveCredentials(ctx context.Context) (clientID, clientSecret, accountURN string) {
+	// Check for credentials in context (from HTTP headers)
+	if creds := auth.CredentialsFromContext(ctx); creds != nil {
+		// Use header values if present, otherwise fall back to client defaults
+		clientID = creds.OAuthClientID
+		if clientID == "" {
+			clientID = c.oauthClientID
+		}
+		clientSecret = creds.OAuthClientSecret
+		if clientSecret == "" {
+			clientSecret = c.oauthClientSecret
+		}
+		accountURN = creds.AccountURN
+		if accountURN == "" {
+			accountURN = c.accountURN
+		}
+		return
+	}
+
+	// No context credentials, use client defaults
+	return c.oauthClientID, c.oauthClientSecret, c.accountURN
+}
+
 func getRequiredScopes() []string {
 	return []string{
 		"app-engine:apps:run",
@@ -155,8 +181,13 @@ func (c *Client) refreshToken(ctx context.Context) error {
 	c.tokenMu.Lock()
 	defer c.tokenMu.Unlock()
 
-	// Check if token is still valid
-	if c.accessToken != "" && time.Now().Add(30*time.Second).Before(c.tokenExpiry) {
+	// Get effective credentials (from context headers or client defaults)
+	oauthClientID, oauthClientSecret, accountURN := c.getEffectiveCredentials(ctx)
+
+	// Check if token is still valid (only for default credentials, not per-request)
+	// When using header-based credentials, we need to check if they differ from defaults
+	usingHeaderCreds := auth.CredentialsFromContext(ctx) != nil
+	if !usingHeaderCreds && c.accessToken != "" && time.Now().Add(30*time.Second).Before(c.tokenExpiry) {
 		return nil
 	}
 
@@ -168,29 +199,29 @@ func (c *Client) refreshToken(ctx context.Context) error {
 	}
 
 	// OAuth client credentials flow
-	if c.oauthClientID == "" || c.oauthClientSecret == "" {
+	if oauthClientID == "" || oauthClientSecret == "" {
 		err := fmt.Errorf("OAuth credentials required: set OAUTH_CLIENT_ID and OAUTH_CLIENT_SECRET")
-		logging.LogTokenError("oauth", c.ssoURL, c.oauthClientID, c.oauthClientSecret, 0, "", err)
+		logging.LogTokenError("oauth", c.ssoURL, oauthClientID, oauthClientSecret, 0, "", err)
 		return err
 	}
 
-	if c.accountURN == "" {
+	if accountURN == "" {
 		err := fmt.Errorf("DT_ACCOUNT_URN is required for OAuth authentication (format: urn:dtaccount:<account-uuid>)")
-		logging.LogTokenError("oauth", c.ssoURL, c.oauthClientID, c.oauthClientSecret, 0, "", err)
+		logging.LogTokenError("oauth", c.ssoURL, oauthClientID, oauthClientSecret, 0, "", err)
 		return err
 	}
 
 	data := url.Values{}
 	data.Set("grant_type", "client_credentials")
-	data.Set("client_id", c.oauthClientID)
-	data.Set("client_secret", c.oauthClientSecret)
-	data.Set("resource", c.accountURN)
+	data.Set("client_id", oauthClientID)
+	data.Set("client_secret", oauthClientSecret)
+	data.Set("resource", accountURN)
 	// Note: scope is omitted as it can conflict with resource parameter
 	// Scopes should be configured on the OAuth client in Dynatrace
 
 	req, err := http.NewRequestWithContext(ctx, "POST", c.ssoURL, strings.NewReader(data.Encode()))
 	if err != nil {
-		logging.LogTokenError("oauth", c.ssoURL, c.oauthClientID, c.oauthClientSecret, 0, "", err)
+		logging.LogTokenError("oauth", c.ssoURL, oauthClientID, oauthClientSecret, 0, "", err)
 		return fmt.Errorf("failed to create token request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -203,14 +234,14 @@ func (c *Client) refreshToken(ctx context.Context) error {
 			"Content-Type": "application/x-www-form-urlencoded",
 		},
 		Body: data.Encode(),
-	}, c.oauthClientID, c.oauthClientSecret)
+	}, oauthClientID, oauthClientSecret)
 
 	startTime := time.Now()
 	resp, err := c.httpClient.Do(req)
 	duration := time.Since(startTime)
 
 	if err != nil {
-		logging.LogTokenError("oauth", c.ssoURL, c.oauthClientID, c.oauthClientSecret, 0, "", err)
+		logging.LogTokenError("oauth", c.ssoURL, oauthClientID, oauthClientSecret, 0, "", err)
 		logging.AuthToken("oauth", 0, err)
 		return fmt.Errorf("failed to get token: %w", err)
 	}
@@ -222,13 +253,13 @@ func (c *Client) refreshToken(ctx context.Context) error {
 	logging.LogHTTPResponse("oauth_token", &logging.HTTPResponseInfo{
 		StatusCode: resp.StatusCode,
 		Body:       string(body),
-	}, duration, c.oauthClientID, c.oauthClientSecret)
+	}, duration, oauthClientID, oauthClientSecret)
 
 	if resp.StatusCode != http.StatusOK {
 		err := fmt.Errorf("token request failed with status %d", resp.StatusCode)
-		logging.LogTokenError("oauth", c.ssoURL, c.oauthClientID, c.oauthClientSecret, resp.StatusCode, string(body), err)
+		logging.LogTokenError("oauth", c.ssoURL, oauthClientID, oauthClientSecret, resp.StatusCode, string(body), err)
 		logging.AuthToken("oauth", 0, err)
-		return fmt.Errorf("token request failed with status %d: %s", resp.StatusCode, logging.SanitizeAndMaskSecrets(string(body), c.oauthClientID, c.oauthClientSecret))
+		return fmt.Errorf("token request failed with status %d: %s", resp.StatusCode, logging.SanitizeAndMaskSecrets(string(body), oauthClientID, oauthClientSecret))
 	}
 
 	var tokenResp struct {
@@ -239,16 +270,16 @@ func (c *Client) refreshToken(ctx context.Context) error {
 	}
 
 	if err := json.Unmarshal(body, &tokenResp); err != nil {
-		logging.LogTokenError("oauth", c.ssoURL, c.oauthClientID, c.oauthClientSecret, resp.StatusCode, string(body), err)
+		logging.LogTokenError("oauth", c.ssoURL, oauthClientID, oauthClientSecret, resp.StatusCode, string(body), err)
 		return fmt.Errorf("failed to decode token response: %w", err)
 	}
 
 	c.accessToken = tokenResp.AccessToken
 	c.tokenExpiry = time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second)
 
-	// Cache the token for future use
-	if c.tokenCache != nil {
-		if err := c.tokenCache.Save(c.accessToken, c.baseURL, c.oauthClientID, c.tokenExpiry); err != nil {
+	// Cache the token for future use (only for default credentials)
+	if !usingHeaderCreds && c.tokenCache != nil {
+		if err := c.tokenCache.Save(c.accessToken, c.baseURL, oauthClientID, c.tokenExpiry); err != nil {
 			logging.Debug("Failed to cache token: %v", err)
 		}
 	}
