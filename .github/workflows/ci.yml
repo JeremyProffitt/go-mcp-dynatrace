@@ -5,11 +5,72 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: Runner preference
+        required: true
+        default: auto
+        type: choice
+        options:
+          - auto
+          - home
+          - github-hosted
 
 jobs:
+  route:
+    runs-on: ubuntu-24.04
+    outputs:
+      runs_on_linux: ${{ steps.pick.outputs.runs_on_linux }}
+      selected: ${{ steps.pick.outputs.selected }}
+    steps:
+      - id: pick
+        env:
+          GH_TOKEN: ${{ secrets.RUNNER_QUERY_TOKEN }}
+          RUNNER_INPUT: ${{ inputs.runner || 'auto' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          github_linux='"ubuntu-latest"'
+          home='["self-hosted","Linux","X64","home","tiny310"]'
+
+          if [[ "$RUNNER_INPUT" == "github-hosted" ]]; then
+            echo "runs_on_linux=$github_linux" >> "$GITHUB_OUTPUT"
+            echo "selected=github-hosted-requested" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          runners="$(gh api "orgs/JeremyProffittOrg/actions/runners?per_page=100")"
+          available="$(
+            jq -r '
+              .runners[]
+              | select(.name == "tiny310")
+              | select(.status == "online")
+              | select(.busy == false)
+              | [.labels[].name] as $labels
+              | select(["self-hosted","Linux","X64","home","tiny310"] - $labels | length == 0)
+              | .name
+            ' <<< "$runners" | head -n 1
+          )"
+
+          if [[ "$RUNNER_INPUT" == "home" && -z "$available" ]]; then
+            echo "tiny310 was requested but is not online and idle" >&2
+            exit 1
+          fi
+
+          if [[ -n "$available" ]]; then
+            echo "runs_on_linux=$home" >> "$GITHUB_OUTPUT"
+            echo "selected=home-auto" >> "$GITHUB_OUTPUT"
+          else
+            echo "runs_on_linux=$github_linux" >> "$GITHUB_OUTPUT"
+            echo "selected=github-hosted-fallback" >> "$GITHUB_OUTPUT"
+          fi
+
   lint:
     name: Lint
-    runs-on: ubuntu-latest
+    needs: route
+    runs-on: ${{ fromJSON(needs.route.outputs.runs_on_linux) }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -23,6 +84,7 @@ jobs:
         run: go vet ./...
 
       - name: Run go fmt check
+        shell: bash
         run: |
           if [ -n "$(gofmt -l .)" ]; then
             echo "Code is not formatted. Run 'go fmt ./...' to fix."
@@ -32,7 +94,8 @@ jobs:
 
   test:
     name: Test
-    runs-on: ${{ matrix.os }}
+    needs: route
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && fromJSON(needs.route.outputs.runs_on_linux) || matrix.os }}
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
